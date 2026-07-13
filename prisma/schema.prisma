@@ -18,4 +18,6 @@ datasource db {
 model Profile {
   id   Int    @id @default(autoincrement())
   name String
+  rank Int
+  createdAt DateTime
 }

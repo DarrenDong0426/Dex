@@ -7,7 +7,8 @@ const { handleRequest } = createYoga({
             type Profile {
                 id: Int!
                 name: String!
-                level: Int! 
+                rank: Int! 
+                createdAt: String!
             }
             type Query {
                 profile: Profile
