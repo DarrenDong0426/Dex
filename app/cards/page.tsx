@@ -9,6 +9,7 @@ type CardGridItem = {
     name: string;
     rarity: number;
     assetbundleName: string;
+    character: { giveName: string; firstName: string | null };
   };
 };
 
@@ -17,7 +18,7 @@ async function getCards(): Promise<CardGridItem[]> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      query: `{ userCards { id level specialTraining card { name rarity assetbundleName } } }`,
+      query: `{ userCards { id level specialTraining card { name rarity assetbundleName character { givenName firstName } } } }`,
     }),
     cache: "no-store",
   });
@@ -43,7 +44,11 @@ export default async function CardsPage() {
               loading={i < 16 ? "eager" : "lazy"}
               className="w-full rounded"
             />
-            <p className="text-xs truncate">{uc.card.name}</p>
+            <p className="text-xs truncate">
+              {[uc.card.character.giveName, uc.card.character.firstName]
+                .filter(Boolean)
+                .join(" ")}
+            </p>
             <p className="text-xs opacity-60">
               Lv{uc.level} · {uc.card.rarity}★
             </p>
