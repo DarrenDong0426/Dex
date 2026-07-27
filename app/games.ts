@@ -8,6 +8,7 @@ export type Game = {
   tag: string;
   logo: string; // short code until real logos are dropped in
   logoBg: string; // css background for the logo tile
+  logoSrc?: string;
   info: Stat[]; // username / game id / since
   hero: Stat; // the big number
   quickStats: Stat[];
@@ -106,6 +107,7 @@ export const games: Game[] = [
     tag: "COLORFUL STAGE! · RHYTHM",
     logo: "PS",
     logoBg: SEKAI_RAINBOW,
+    logoSrc: "/logos/sekai.png",
     info: [
       { value: "Itami", label: "username" },
       { value: "#8821 4471 90", label: "game ID" },
@@ -131,6 +133,7 @@ export const games: Game[] = [
     tag: "TEYVAT · OPEN-WORLD RPG",
     logo: "GI",
     logoBg: GENSHIN_GOLD,
+    logoSrc: "/logos/genshin.png",
     info: [
       { value: "Itami", label: "username" },
       { value: "800000000", label: "UID" },

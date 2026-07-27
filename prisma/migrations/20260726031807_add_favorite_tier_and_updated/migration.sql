@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "Profile" ADD COLUMN     "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+-- AlterTable
+ALTER TABLE "UserCharacter" ADD COLUMN     "favoriteTier" INTEGER;

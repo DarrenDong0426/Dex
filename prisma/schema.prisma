@@ -10,14 +10,157 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
 model Profile {
-  id   Int    @id @default(autoincrement())
-  name String
-  rank Int
+  id        Int      @id @default(autoincrement())
+  name      String
+  rank      Int
   createdAt DateTime
+  updatedAt DateTime @updatedAt @default(now())
 }
+
+model Card {
+  id              Int        @id
+  name            String
+  rarity          Int
+  characterId     Int
+  userCards       UserCard[]
+  assetbundleName String
+  character       Character  @relation(fields: [characterId], references: [id])
+}
+
+model UserCard {
+  id              Int     @id @default(autoincrement())
+  cardId          Int
+  card            Card    @relation(fields: [cardId], references: [id])
+  level           Int
+  masterRank      Int
+  skillLevel      Int
+  specialTraining Boolean
+}
+
+model Character {
+  id             Int             @id
+  firstName      String?
+  givenName      String
+  unit           String
+  cards          Card[]
+  userCharacters UserCharacter[]
+  challengeStages UserChallengeStage[]
+}
+
+model Music {
+  id              Int               @id
+  title           String
+  assetbundleName String
+  results         UserMusicResult[]
+}
+
+model UserMusicResult {
+  id         Int    @id @default(autoincrement())
+  musicId    Int
+  music      Music  @relation(fields: [musicId], references: [id])
+  difficulty String
+  playResult String
+
+  @@unique([musicId, difficulty])
+}
+
+model UserCharacter {
+  id            Int       @id @default(autoincrement())
+  characterId   Int
+  character     Character @relation(fields: [characterId], references: [id])
+  characterRank Int
+  favoriteTier Int?  
+}
+
+model Stamp {
+  id                  Int         @id
+  name                String
+  assetbundleName     String
+  characterId         Int
+  gameCharacterUnitId Int?
+  userStamps          UserStamp[]
+}
+
+model UserStamp {
+  id      Int   @id @default(autoincrement())
+  stampId Int
+  stamp   Stamp @relation(fields: [stampId], references: [id])
+}
+
+model Event {
+  id                 Int         @id
+  name               String
+  assetbundleName    String
+  bgmAssetbundleName String?
+  eventType          String
+  startAt            DateTime
+  userEvents         UserEvent[]
+}
+
+model UserEvent {
+  id      Int   @id @default(autoincrement())
+  eventId Int
+  event   Event @relation(fields: [eventId], references: [id])
+  rank    Int?
+}
+
+model Honor {
+  id              Int         @id
+  name            String
+  assetbundleName String
+  honorRarity     String
+  userHonors      UserHonor[]
+}
+
+model UserHonor {
+  id      Int   @id @default(autoincrement())
+  honorId Int
+  honot   Honor @relation(fields: [honorId], references: [id])
+  level   Int
+}
+
+model BondHonor {
+  id             Int              @id
+  name           String
+  bondsGroupId   Int
+  characterId1   Int
+  characterId2   Int
+  honorRarity    String
+  userBondHonors UserBondHonors[]
+}
+
+model UserBondHonors {
+  id          Int       @id @default(autoincrement())
+  bondHonorId Int
+  bondHonor   BondHonor @relation(fields: [bondHonorId], references: [id])
+  level       Int
+}
+
+model AreaItem {
+  id              Int            @id
+  name            String
+  areaId          Int
+  assetbundleName String
+  userAreaItems   UserAreaItem[]
+}
+
+model UserAreaItem {
+  id         Int      @id @default(autoincrement())
+  areaItemId Int
+  areaItem   AreaItem @relation(fields: [areaItemId], references: [id])
+  level      Int
+}
+
+model UserChallengeStage {
+  id             Int       @id @default(autoincrement())
+  characterId    Int
+  character      Character @relation(fields: [characterId], references: [id])
+  challengeLevel Int
+}
+

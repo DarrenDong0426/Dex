@@ -1,20 +1,32 @@
 import ProfileClient from "@/app/ProfileClient";
 
-async function getProfile() {
+async function getData() {
   const res = await fetch("http://localhost:3000/api/graphql", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      query: `{ profile { name rank createdAt } }`,
+      query: `{
+        profile { name rank createdAt }
+        sekaiSummary {
+          rank
+          updatedAt
+          cardCount
+          eventCount
+          difficulties { difficulty clears fullCombos fullPerfects }
+          characters { characterId name characterRank challengeLevel favoriteTier unit }
+        }
+      }`,
     }),
     cache: "no-store",
   });
   const json = await res.json();
-  if (!json.data?.profile) return null;
-  return json.data.profile;
+  return {
+    profile: json.data?.profile ?? null,
+    summary: json.data?.sekaiSummary ?? null,
+  };
 }
 
 export default async function Page() {
-  const profile = await getProfile();
-  return <ProfileClient profile={profile} />;
+  const { profile, summary } = await getData();
+  return <ProfileClient profile={profile} summary={summary} />;
 }
