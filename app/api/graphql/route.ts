@@ -1,6 +1,14 @@
 import { createSchema, createYoga } from "graphql-yoga";
 import { prisma } from "@/lib/prisma";
 
+// rank → rarity band (mirrors app/honor.ts)
+function rarityForRank(rank: number): "low" | "middle" | "high" | "highest" {
+  if (rank >= 130) return "highest";
+  if (rank >= 80) return "high";
+  if (rank >= 30) return "middle";
+  return "low";
+}
+
 const { handleRequest } = createYoga({
   schema: createSchema({
     typeDefs: `
@@ -45,6 +53,7 @@ const { handleRequest } = createYoga({
         challengeLevel: Int
         favoriteTier: Int
         unit: String
+        honorAsset: String
       }
       type SekaiSummary {
         rank: Int
@@ -76,6 +85,7 @@ const { handleRequest } = createYoga({
             musicGroups,
             userChars,
             stages,
+            allFanHonors,
           ] = await Promise.all([
             prisma.profile.findFirst(),
             prisma.userCard.count(),
@@ -88,9 +98,11 @@ const { handleRequest } = createYoga({
               include: { character: true },
             }),
             prisma.userChallengeStage.findMany(),
+            // all fan honors once, matched in memory (no groupId → match by name)
+            prisma.honor.findMany({
+              where: { name: { endsWith: "Fan" } },
+            }),
           ]);
-          const musicCount = await prisma.userMusicResult.count();
-          console.log("music count:", musicCount);
 
           // per-difficulty clear / full-combo / full-perfect counts
           const diffMap: Record<
@@ -117,16 +129,31 @@ const { handleRequest } = createYoga({
           const stageByChar = new Map(
             stages.map((s) => [s.characterId, s.challengeLevel]),
           );
-          const characters = userChars.map((uc) => ({
-            characterId: uc.characterId,
-            name:
-              (uc.character.givenName ?? "") +
-              (uc.character.firstName ? " " + uc.character.firstName : ""),
-            characterRank: uc.characterRank,
-            challengeLevel: stageByChar.get(uc.characterId) ?? null,
-            favoriteTier: uc.favoriteTier ?? null,
-            unit: uc.character.unit,
-          }));
+
+          const characters = userChars.map((uc) => {
+            const givenName = uc.character.givenName ?? "";
+            const displayName =
+              givenName +
+              (uc.character.firstName ? " " + uc.character.firstName : "");
+            // The honor name is "Ichika Fan" (given name first). In this DB the
+            // given name is the LAST word of the display name (name is stored
+            // surname-first), so match honors on that.
+            const given = displayName.trim().split(" ").at(-1) ?? "";
+            const rarity = rarityForRank(uc.characterRank);
+            const honorRow = allFanHonors.find(
+              (h) => h.name.startsWith(given) && h.honorRarity === rarity,
+            );
+
+            return {
+              characterId: uc.characterId,
+              name: displayName,
+              characterRank: uc.characterRank,
+              challengeLevel: stageByChar.get(uc.characterId) ?? null,
+              favoriteTier: uc.favoriteTier ?? null,
+              unit: uc.character.unit,
+              honorAsset: honorRow?.assetbundleName ?? null,
+            };
+          });
 
           return {
             rank: profile?.rank ?? null,

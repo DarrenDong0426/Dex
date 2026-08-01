@@ -1,10 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
-import { Instagram } from "lucide-react";
 import { games, themes, type Game, type Mode } from "@/app/games";
 import BackgroundFX from "@/app/BackgroundFX";
+import {
+  fanHonorForRank,
+  pips,
+  honorImageUrl,
+  honorFrameUrl,
+} from "@/app/honor";
 
 type ProfileData = { name: string; rank: number; createdAt: string } | null;
 
@@ -22,6 +26,9 @@ type CharacterSummary = {
   challengeLevel: number | null;
   favoriteTier: number | null;
   unit: string;
+  // assetbundleName of this character's fan honor (from Honor table by
+  // groupId===characterId). Optional so it degrades gracefully if absent.
+  honorAsset?: string | null;
 };
 
 type Summary = {
@@ -56,9 +63,9 @@ const DIFFICULTY_COLORS: Record<string, string> = {
   APPEND: "#d76fd0",
 };
 
-// Self-hosted character icons in /public/chara/, named by lowercase GIVEN name
-// (e.g. /chara/ichika.png). The sekai.best URL is a hashed build asset, so we
-// self-host. summary name is "Ichika Hoshino" → given name is the first word.
+// Self-hosted character icons in /public/chara/, named by lowercase given name
+// (e.g. /chara/ichika.png). Name comes as "Hoshino Ichika" (surname first),
+// so the given name is the LAST word.
 function charaIcon(fullName: string): string {
   const parts = fullName.trim().split(" ");
   const given = parts[parts.length - 1].toLowerCase();
@@ -202,8 +209,10 @@ function Sidebar({
             className={`relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-[14px] text-[15px] font-extrabold text-white transition
                         ${on ? "opacity-100" : "opacity-50 hover:opacity-85"}`}
             style={{
-              background: g.logoSrc ? "var(--panel-2)" : g.logoBg,
-              boxShadow: on ? "0 0 22px -2px var(--accent)" : undefined,
+              background: g.logoBg,
+              boxShadow: on
+                ? "0 0 0 2px var(--panel), 0 0 0 4px var(--accent), 0 0 22px -2px var(--accent)"
+                : undefined,
             }}
           >
             {on && (
@@ -249,20 +258,32 @@ function ProfileBanner() {
     >
       <div
         className="pointer-events-none absolute -top-16 -right-16 h-72 w-72 rounded-full opacity-20"
-        style={{ background: "radial-gradient(circle, var(--accent), transparent 70%)" }}
+        style={{
+          background: "radial-gradient(circle, var(--accent), transparent 70%)",
+        }}
       />
 
       {/* LEFT: pfp + name + alias + meta */}
       <div className="flex items-center gap-7">
-        <div className="flex h-24 w-24 flex-shrink-0 items-center justify-center rounded-[26px] bg-gradient-to-br from-[#eeeeff] to-[#b7b7d6] text-4xl font-extrabold text-[#1a1730] shadow-lg">
-          I
-        </div>
+        {/* self-hosted profile picture — drop your Discord avatar at /public/pfp.png */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/pfp.png"
+          alt="ITAMI"
+          className="h-24 w-24 flex-shrink-0 rounded-[26px] object-cover shadow-lg"
+        />
         <div>
-          <div className="text-4xl font-extrabold tracking-tight" style={{ color: "var(--banner-text)" }}>
+          <div
+            className="text-4xl font-extrabold tracking-tight"
+            style={{ color: "var(--banner-text)" }}
+          >
             ITAMI
           </div>
           <div className="mt-2 text-sm" style={{ color: "var(--banner-sub)" }}>
-            A.K.A. <b className="font-semibold" style={{ color: "var(--banner-b)" }}>NONAME</b>
+            A.K.A.{" "}
+            <b className="font-semibold" style={{ color: "var(--banner-b)" }}>
+              NONAME
+            </b>
           </div>
           <div className="mt-3.5 flex gap-6">
             <Meta value={String(games.length)} label="games" />
@@ -272,27 +293,31 @@ function ProfileBanner() {
       </div>
 
       {/* RIGHT: description + socials */}
-      <div className="relative max-w-sm sm:text-right">
-        <p className="text-[13px] leading-relaxed" style={{ color: "var(--banner-sub)" }}>
-          Your description here — a short blurb about you, your games, whatever
-          you want visitors to read.
+      <div className="relative max-w-sm">
+        <p
+          className="text-[13px] leading-relaxed"
+          style={{ color: "var(--banner-sub)" }}
+        >
+          Developer, into software, AI, embedded systems, and anime. This is
+          where I keep track of the games I play. Open to friends in any game,
+          just reach out.
         </p>
-        <div className="mt-4 flex gap-3 sm:justify-end">
+        <div className="mt-4 flex flex-wrap gap-2.5">
           <a
-            href="https://instagram.com/YOURHANDLE"
+            href="https://www.instagram.com/amekage_itami/"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1.5 text-[12px] font-semibold text-[var(--text)] transition hover:border-[var(--accent)]"
           >
-            <Instagram size={14} /> Instagram
+            <InstagramIcon /> amekage_itami
           </a>
           <a
-            href="https://discord.gg/YOURINVITE"
+            href="https://discord.com/users/username.noname"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1.5 text-[12px] font-semibold text-[var(--text)] transition hover:border-[var(--accent)]"
           >
-            <DiscordIcon /> Discord
+            <DiscordIcon /> username.noname
           </a>
         </div>
       </div>
@@ -300,10 +325,33 @@ function ProfileBanner() {
   );
 }
 
-// Discord isn't in lucide-react — small inline SVG
+function InstagramIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      aria-hidden
+    >
+      <rect x="2" y="2" width="20" height="20" rx="5" />
+      <circle cx="12" cy="12" r="4" />
+      <circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 function DiscordIcon() {
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden
+    >
       <path d="M20.317 4.37a19.79 19.79 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.865-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.3 12.3 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z" />
     </svg>
   );
@@ -351,7 +399,7 @@ function FolderTabs({
           >
             <span
               className="inline-flex h-5 w-5 items-center justify-center overflow-hidden rounded-md text-[9px] font-extrabold text-white"
-              style={{ background: g.logoSrc ? "var(--panel-2)" : g.logoBg }}
+              style={{ background: g.logoBg }}
             >
               {g.logoSrc ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -446,8 +494,7 @@ function CharacterGrid({ characters }: { characters: CharacterSummary[] }) {
 
   return (
     <div>
-      {/* rank / challenge toggle */}
-      <div className="mb-3 inline-flex rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
+      <div className="mb-2.5 inline-flex rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
         <button
           onClick={() => setShowChallenge(false)}
           className="rounded-full px-2.5 py-0.5 transition"
@@ -484,17 +531,17 @@ function CharacterGrid({ characters }: { characters: CharacterSummary[] }) {
                 return (
                   <div
                     key={c.characterId}
-                    className="flex items-center gap-1 rounded-full bg-[var(--panel-2)] p-0.5 pr-2"
+                    className="flex items-center gap-1.5 rounded-full bg-[var(--panel-2)] p-1 pr-2.5"
                     title={c.name}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={charaIcon(c.name)}
                       alt={c.name}
-                      className="h-5 w-5 flex-shrink-0 rounded-full object-cover"
+                      className="h-7 w-7 flex-shrink-0 rounded-full object-cover"
                       loading="lazy"
                     />
-                    <span className="text-[11px] font-bold leading-none text-[var(--text)]">
+                    <span className="text-[13px] font-bold leading-none text-[var(--text)]">
                       {value ?? "—"}
                     </span>
                   </div>
@@ -502,6 +549,47 @@ function CharacterGrid({ characters }: { characters: CharacterSummary[] }) {
               })}
             </div>
           </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- honor badge (fan honor derived from character rank) ---------- */
+
+function HonorBadge({
+  rank,
+  honorAsset,
+}: {
+  rank: number;
+  honorAsset?: string | null;
+}) {
+  const honor = fanHonorForRank(rank);
+  if (!honor || !honorAsset) return null;
+
+  return (
+    <div className="relative mt-1 inline-flex h-[28px] items-center">
+      {/* base honor art */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={honorImageUrl(honorAsset)}
+        alt=""
+        className="h-[28px] w-auto"
+        loading="lazy"
+      />
+      {/* rarity frame overlay */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={honorFrameUrl(honor.rarity)}
+        alt=""
+        className="pointer-events-none absolute inset-0 h-[28px] w-full object-fill"
+        loading="lazy"
+      />
+      {/* pips — always 5 past rank 25; recolored left→right per 25-band */}
+      <div className="pointer-events-none absolute bottom-[-3px] left-[13px] flex gap-[1px]">
+        {pips(rank).map((src, i) => (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img key={i} src={src} alt="" className="h-[6px] w-[6px]" />
         ))}
       </div>
     </div>
@@ -562,6 +650,98 @@ function FavoriteTiers({ characters }: { characters: CharacterSummary[] }) {
   );
 }
 
+/* ---------- top songs (manual pick — 3 square covers) ---------- */
+
+// Sekai music jacket URL from a music assetbundleName (JP bucket, like cards).
+// Reuse this in the full Music section to render every song's jacket.
+export function jacketUrl(assetbundleName: string): string {
+  return `https://storage.sekai.best/sekai-jp-assets/music/jacket/${assetbundleName}/${assetbundleName}.webp`;
+}
+
+// No "favorite song" field in the data yet, so these are hand-picked by
+// assetbundleName. Fill in each song's real abn (from the Music table).
+const TOP_SONGS: { title: string; abn: string }[] = [
+  { title: "Bad Apple!!", abn: "jacket_s_501" },
+  { title: "Gunjou Sanka", abn: "jacket_s_141" },
+  { title: "Neo", abn: "jacket_s_366" },
+];
+
+function TopSongs() {
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      {TOP_SONGS.map((s) => (
+        <div key={s.title} className="flex flex-col gap-1.5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={s.abn ? jacketUrl(s.abn) : ""}
+            alt={s.title}
+            className="aspect-square w-full rounded-xl bg-[var(--panel-2)] object-cover shadow-md"
+            loading="lazy"
+          />
+          <div className="truncate text-center text-[12px] font-bold text-[var(--text)]">
+            {s.title}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------- Kizuna — all characters' honors, grouped by team ---------- */
+
+function KizunaGrid({ characters }: { characters: CharacterSummary[] }) {
+  const byUnit = new Map<string, CharacterSummary[]>();
+  for (const c of characters) {
+    const u = c.unit ?? "other";
+    if (!byUnit.has(u)) byUnit.set(u, []);
+    byUnit.get(u)!.push(c);
+  }
+  const units = UNIT_ORDER.filter((u) => byUnit.has(u));
+
+  return (
+    <div>
+      <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wider text-[var(--muted)]">
+        Kizuna
+      </h2>
+      <div className="flex flex-col gap-4">
+        {units.map((u) => (
+          <div key={u}>
+            <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">
+              {UNIT_LABELS[u] ?? u}
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {byUnit.get(u)!.map((c) => (
+                <div
+                  key={c.characterId}
+                  className="flex items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--panel-2)] p-1.5"
+                  title={c.name}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={charaIcon(c.name)}
+                    alt={c.name}
+                    className="h-8 w-8 flex-shrink-0 rounded-full object-cover"
+                    loading="lazy"
+                  />
+                  <div className="min-w-0 leading-tight">
+                    <div className="truncate text-[11px] font-bold text-[var(--text)]">
+                      {c.name}
+                    </div>
+                    <HonorBadge
+                      rank={c.characterRank}
+                      honorAsset={c.honorAsset}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- summary card ---------- */
 
 function SummaryCard({
@@ -576,6 +756,8 @@ function SummaryCard({
   difficulties: Difficulty[];
 }) {
   const hasData = characters.length > 0;
+  const [activeSection, setActiveSection] = useState("Summary");
+  const allSections = ["Summary", ...game.sections];
 
   return (
     <div
@@ -593,7 +775,7 @@ function SummaryCard({
         <div className="flex items-center gap-4">
           <div
             className="flex h-[60px] w-[60px] flex-shrink-0 items-center justify-center overflow-hidden rounded-2xl text-xl font-extrabold text-white shadow-lg"
-            style={{ background: game.logoSrc ? "transparent" : game.logoBg }}
+            style={{ background: game.logoBg }}
           >
             {game.logoSrc ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -627,15 +809,23 @@ function SummaryCard({
 
       <div className="flex flex-col gap-5 p-7">
         <div className="flex flex-wrap items-center gap-2">
-          {game.sections.map((s) => (
-            <Link
-              key={s}
-              href={`/${game.slug}/${s.toLowerCase()}`}
-              className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3.5 py-1.5 text-[12.5px] text-[var(--muted)] transition hover:border-[var(--accent)] hover:text-[var(--text)]"
-            >
-              {s} <span className="text-[11px] opacity-60">&rarr;</span>
-            </Link>
-          ))}
+          {allSections.map((s) => {
+            const on = s === activeSection;
+            return (
+              <button
+                key={s}
+                onClick={() => setActiveSection(s)}
+                className="rounded-full border px-3.5 py-1.5 text-[12.5px] font-semibold transition"
+                style={{
+                  background: on ? "var(--accent)" : "var(--panel-2)",
+                  color: on ? "#0c0a1e" : "var(--muted)",
+                  borderColor: on ? "var(--accent)" : "var(--line)",
+                }}
+              >
+                {s}
+              </button>
+            );
+          })}
           {lastUpdated && (
             <span className="ml-auto text-[11px] text-[var(--muted)]">
               updated {lastUpdated}
@@ -643,81 +833,103 @@ function SummaryCard({
           )}
         </div>
 
-        <div>
-          <div
-            className="text-[52px] font-extrabold leading-none"
-            style={{
-              color: "var(--accent)",
-              textShadow: "0 0 30px var(--accent)",
-            }}
-          >
-            {game.hero.value}
+        {activeSection !== "Summary" && (
+          <div className="py-12 text-center text-[var(--muted)]">
+            {activeSection} — coming soon
           </div>
-          <div className="mt-0.5 text-[13px] text-[var(--muted)]">
-            {game.hero.label}
-          </div>
-        </div>
+        )}
 
-        {hasData ? (
+        {activeSection === "Summary" && (
           <>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <DifficultyStrip
-                title="CLEAR"
-                difficulties={difficulties}
-                field="clears"
-              />
-              <DifficultyStrip
-                title="FULL COMBO"
-                difficulties={difficulties}
-                field="fullCombos"
-              />
+            <div>
+              <div
+                className="text-[52px] font-extrabold leading-none"
+                style={{
+                  color: "var(--accent)",
+                  textShadow: "0 0 30px var(--accent)",
+                }}
+              >
+                {game.hero.value}
+              </div>
+              <div className="mt-0.5 text-[13px] text-[var(--muted)]">
+                {game.hero.label}
+              </div>
             </div>
 
-            {/* tiers ABOVE the rank/challenge grid */}
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-              {/* left: rank/challenge grid (2/3) */}
-              <div className="min-w-0 lg:w-1/2">
-                <FavoriteTiers characters={characters} />
-              </div>
-              {/* right: tiers (1/3) */}
-              <div className="lg:w-1/2">
-                <CharacterGrid characters={characters} />
-              </div>
-            </div>
-          </>
-        ) : (
-          <div>
-            <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wider text-[var(--muted)]">
-              Top Characters
-            </h2>
-            <div className="flex flex-wrap gap-2">
-              {game.favorites.map((f) => (
-                <div
-                  key={f.name}
-                  className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--panel-2)] py-0.5 pl-0.5 pr-3"
-                >
-                  <div
-                    className="h-7 w-7 rounded-full"
-                    style={{
-                      background:
-                        "linear-gradient(135deg, var(--accent), var(--accent-2))",
-                    }}
+            {hasData ? (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <DifficultyStrip
+                    title="CLEAR"
+                    difficulties={difficulties}
+                    field="clears"
                   />
-                  <div className="leading-tight">
-                    <div className="text-[12px] font-bold text-[var(--text)]">
-                      {f.name}
-                    </div>
-                    <div
-                      className="text-[10px]"
-                      style={{ color: "var(--accent)" }}
-                    >
-                      {f.rank}
+                  <DifficultyStrip
+                    title="FULL COMBO"
+                    difficulties={difficulties}
+                    field="fullCombos"
+                  />
+                </div>
+
+                {/* tiers (left) + rank/challenge grid (right) side by side */}
+                <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+                  <div className="min-w-0 lg:w-1/2">
+                    <FavoriteTiers characters={characters} />
+
+                    {/* top songs fill the space beneath the tiers */}
+                    <div className="mt-6">
+                      <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                        Top Songs
+                      </h2>
+                      <TopSongs />
                     </div>
                   </div>
+                  <div className="min-w-0 lg:w-1/2">
+                    <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                      Characters
+                    </h2>
+                    <CharacterGrid characters={characters} />
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
+
+                {/* Kizuna — all characters' honors grouped by team, full width */}
+                <KizunaGrid characters={characters} />
+              </>
+            ) : (
+              <div>
+                <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                  Top Characters
+                </h2>
+                <div className="flex flex-wrap gap-2">
+                  {game.favorites.map((f) => (
+                    <div
+                      key={f.name}
+                      className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--panel-2)] py-0.5 pl-0.5 pr-3"
+                    >
+                      <div
+                        className="h-7 w-7 rounded-full"
+                        style={{
+                          background:
+                            "linear-gradient(135deg, var(--accent), var(--accent-2))",
+                        }}
+                      />
+                      <div className="leading-tight">
+                        <div className="text-[12px] font-bold text-[var(--text)]">
+                          {f.name}
+                        </div>
+                        <div
+                          className="text-[10px]"
+                          style={{ color: "var(--accent)" }}
+                        >
+                          {f.rank}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

@@ -13,7 +13,7 @@ async function getData() {
           cardCount
           eventCount
           difficulties { difficulty clears fullCombos fullPerfects }
-          characters { characterId name characterRank challengeLevel favoriteTier unit }
+          characters { characterId name characterRank challengeLevel favoriteTier unit honorAsset }
         }
       }`,
     }),
