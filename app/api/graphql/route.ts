@@ -66,6 +66,18 @@ const { handleRequest } = createYoga({
         skillLevel: Int
         specialTraining: Boolean
       }
+      type MusicDifficultyResult {
+        difficulty: String!
+        playResult: String
+        playLevel: Int
+      }
+      type MusicSong {
+        id: Int!
+        title: String!
+        assetbundleName: String!
+        tags: [String!]!
+        results: [MusicDifficultyResult!]!
+      }
       type SekaiSummary {
         rank: Int
         updatedAt: String
@@ -79,6 +91,7 @@ const { handleRequest } = createYoga({
         userCards: [UserCard!]!
         sekaiSummary: SekaiSummary
         characterCards(characterId: Int!): [CharacterCard!]!
+        musicList: [MusicSong!]!
       }
     `,
     resolvers: {
@@ -220,6 +233,56 @@ const { handleRequest } = createYoga({
               // 4★ → 1★ (rarity desc), then cardId asc within a rarity
               .sort((a, b) => b.rarity - a.rarity || a.cardId - b.cardId)
           );
+        },
+
+        musicList: async () => {
+          const [songs, results, difficulties, tags] = await Promise.all([
+            prisma.music.findMany({ orderBy: { id: "asc" } }),
+            prisma.userMusicResult.findMany(),
+            prisma.musicDifficulty.findMany(),
+            prisma.musicTag.findMany(),
+          ]);
+
+          // level per (musicId, difficulty) from MusicDifficulty
+          const levelByKey = new Map<string, number>();
+          for (const d of difficulties) {
+            levelByKey.set(`${d.musicId}:${d.musicDifficulty}`, d.playLevel);
+          }
+
+          // user's best result per (musicId, difficulty)
+          const resultByKey = new Map<string, string>();
+          for (const r of results) {
+            resultByKey.set(`${r.musicId}:${r.difficulty}`, r.playResult);
+          }
+
+          // which difficulties exist per song (from MusicDifficulty)
+          const diffsByMusic = new Map<number, string[]>();
+          for (const d of difficulties) {
+            if (!diffsByMusic.has(d.musicId)) diffsByMusic.set(d.musicId, []);
+            diffsByMusic.get(d.musicId)!.push(d.musicDifficulty);
+          }
+
+          // tags per song
+          const tagsByMusic = new Map<number, string[]>();
+          for (const t of tags) {
+            if (!tagsByMusic.has(t.musicId)) tagsByMusic.set(t.musicId, []);
+            tagsByMusic.get(t.musicId)!.push(t.musicTag);
+          }
+
+          return songs.map((s) => {
+            const diffs = diffsByMusic.get(s.id) ?? [];
+            return {
+              id: s.id,
+              title: s.title,
+              assetbundleName: s.assetbundleName,
+              tags: tagsByMusic.get(s.id) ?? [],
+              results: diffs.map((diff) => ({
+                difficulty: diff,
+                playResult: resultByKey.get(`${s.id}:${diff}`) ?? null,
+                playLevel: levelByKey.get(`${s.id}:${diff}`) ?? null,
+              })),
+            };
+          });
         },
       },
     },

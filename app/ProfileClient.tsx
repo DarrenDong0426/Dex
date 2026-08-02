@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { games, themes, type Game, type Mode } from "@/app/games";
 import BackgroundFX from "@/app/BackgroundFX";
 import {
@@ -661,7 +661,7 @@ function FavoriteTiers({ characters }: { characters: CharacterSummary[] }) {
 // Sekai music jacket URL from a music assetbundleName (JP bucket, like cards).
 // Reuse this in the full Music section to render every song's jacket.
 export function jacketUrl(assetbundleName: string): string {
-  return `https://storage.sekai.best/sekai-jp-assets/music/jacket/${assetbundleName}/${assetbundleName}.webp`;
+  return `https://storage.sekai.best/sekai-en-assets/music/jacket/${assetbundleName}/${assetbundleName}.webp`;
 }
 
 // No "favorite song" field in the data yet, so these are hand-picked by
@@ -1338,6 +1338,351 @@ function CardsSection({ characters }: { characters: CharacterSummary[] }) {
   );
 }
 
+/* ---------- Music section (song list with jacket + your results) ---------- */
+
+type MusicResult = {
+  difficulty: string;
+  playResult: string | null;
+  playLevel: number | null;
+};
+type MusicSong = {
+  id: number;
+  title: string;
+  assetbundleName: string;
+  tags: string[];
+  results: MusicResult[];
+};
+
+// difficulty level pip — circle with the play level number. COLOR reflects the
+// user's result on that chart (same ladder as honor pips):
+//   none/not-cleared → empty (outline)   clear → bronze
+//   full combo → blue/teal                full perfect → purple
+const RESULT_COLORS: Record<string, string> = {
+  CLEAR: "#c8955a", // bronze
+  FULL_COMBO: "#4a9de0", // blue/teal
+  FULL_PERFECT: "#9b5ad6", // purple
+};
+
+function LevelPip({
+  level,
+  result,
+}: {
+  level: number | null;
+  result: string | null;
+}) {
+  if (level == null) return null;
+  const isFP = result === "FULL_PERFECT";
+  const color = result ? RESULT_COLORS[result] : undefined;
+  const filled = Boolean(color);
+  // full perfect = rainbow gradient; others = solid result color
+  const rainbow =
+    "linear-gradient(135deg, #ff5f6d, #ffc371, #47e5bc, #4a9de0, #9b5ad6)";
+  return (
+    <span
+      className="inline-flex h-9 w-9 flex-shrink-0 rotate-45 items-center justify-center rounded-[5px] text-[14px] font-extrabold"
+      style={{
+        background: isFP ? rainbow : filled ? color : "transparent",
+        border: `2px solid ${isFP ? "transparent" : (color ?? "var(--line)")}`,
+        boxShadow: isFP ? "0 0 10px 1px rgba(155,90,214,0.6)" : undefined,
+      }}
+      title={`Lv ${level}${result ? ` · ${result.replace("_", " ").toLowerCase()}` : ""}`}
+    >
+      <span
+        className="-rotate-45"
+        style={{ color: filled ? "#0c0a1e" : "var(--muted)" }}
+      >
+        {level}
+      </span>
+    </span>
+  );
+}
+
+// music rail: tag → unit logo slug (maps to the same sekai.best unit logos as
+// the cards rail). "all" and "other" get text labels instead of a unit logo.
+const MUSIC_RAIL: { tag: string; label: string; logo?: string }[] = [
+  { tag: "all", label: "All" },
+  { tag: "vocaloid", label: "Virtual Singer", logo: "piapro" },
+  { tag: "light_music_club", label: "Leo/need", logo: "light_sound" },
+  { tag: "idol", label: "MORE MORE JUMP!", logo: "idol" },
+  { tag: "street", label: "Vivid BAD SQUAD", logo: "street" },
+  { tag: "theme_park", label: "Wonderlands×Showtime", logo: "theme_park" },
+  {
+    tag: "school_refusal",
+    label: "Nightcord at 25:00",
+    logo: "school_refusal",
+  },
+  { tag: "other", label: "Other" },
+];
+
+function MusicSection() {
+  const [songs, setSongs] = useState<MusicSong[] | null>(null);
+  const [error, setError] = useState(false);
+  const [query, setQuery] = useState("");
+  const [activeTag, setActiveTag] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [diffFilter, setDiffFilter] = useState("all");
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // seamless infinite loop: the list is rendered 3× stacked. Keep the scroll
+  // position within the MIDDLE copy; when it drifts into the first or last
+  // copy, jump back by one copy-height so it wraps without a visible seam.
+  function handleScroll() {
+    const el = scrollRef.current;
+    if (!el || filtered.length < 8) return;
+    const copy = el.scrollHeight / 3;
+    if (el.scrollTop < copy * 0.5) {
+      el.scrollTop += copy;
+    } else if (el.scrollTop > copy * 1.5) {
+      el.scrollTop -= copy;
+    }
+  }
+
+  // start in the middle copy once songs load (only when tripled for looping)
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && filtered.length >= 8) {
+      el.scrollTop = el.scrollHeight / 3;
+    } else if (el) {
+      el.scrollTop = 0;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [songs, activeTag, query, status, diffFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `{ musicList { id title assetbundleName tags results { difficulty playResult playLevel } } }`,
+      }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const list = j?.data?.musicList;
+        if (Array.isArray(list)) setSongs(list);
+        else setError(true);
+      })
+      .catch(() => !cancelled && setError(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filtered = (songs ?? []).filter((s) => {
+    const matchesTag = activeTag === "all" || s.tags.includes(activeTag);
+    const matchesQuery = s.title.toLowerCase().includes(query.toLowerCase());
+    // status filter, scoped to a specific difficulty or ANY difficulty
+    let matchesStatus = true;
+    if (status !== "all") {
+      const pool =
+        diffFilter === "all"
+          ? s.results
+          : s.results.filter((r) => r.difficulty === diffFilter);
+      if (status === "UNATTEMPTED") {
+        matchesStatus = pool.some((r) => !r.playResult);
+      } else {
+        matchesStatus = pool.some((r) => r.playResult === status);
+      }
+    } else if (diffFilter !== "all") {
+      // difficulty picked but status "all" → just require the song has that difficulty
+      matchesStatus = s.results.some((r) => r.difficulty === diffFilter);
+    }
+    return matchesTag && matchesQuery && matchesStatus;
+  });
+
+  if (error)
+    return (
+      <div className="py-12 text-center text-[var(--muted)]">
+        Couldn&apos;t load music.
+      </div>
+    );
+  if (!songs)
+    return (
+      <div className="py-12 text-center text-[var(--muted)]">Loading…</div>
+    );
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* search + status filter + difficulty filter — top, full width */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by song title"
+          className="min-w-[180px] flex-1 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-4 py-2 text-[13px] text-[var(--text)] outline-none focus:border-[var(--accent)]"
+        />
+        <div className="inline-flex rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
+          {(
+            [
+              ["all", "All"],
+              ["UNATTEMPTED", "Unattempted"],
+              ["CLEAR", "Clear"],
+              ["FULL_COMBO", "FC"],
+              ["FULL_PERFECT", "AP"],
+            ] as [string, string][]
+          ).map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setStatus(v)}
+              className="rounded-full px-2.5 py-1 transition"
+              style={{
+                background: status === v ? "var(--accent)" : "transparent",
+                color: status === v ? "#0c0a1e" : "var(--muted)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* difficulty selector */}
+        <div className="inline-flex rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
+          {["all", ...DIFFICULTY_ORDER].map((d) => (
+            <button
+              key={d}
+              onClick={() => setDiffFilter(d)}
+              className="rounded-full px-2.5 py-1 transition"
+              style={{
+                background:
+                  diffFilter === d
+                    ? d === "all"
+                      ? "var(--accent)"
+                      : DIFFICULTY_COLORS[d]
+                    : "transparent",
+                color: diffFilter === d ? "#0c0a1e" : "var(--muted)",
+              }}
+            >
+              {d === "all" ? "All" : d[0] + d.slice(1).toLowerCase()}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* rail (centered) + song list */}
+      <div className="flex items-center gap-4">
+        {/* unit/tag rail — vertically centered */}
+        <div className="flex w-[130px] flex-shrink-0 flex-col gap-2 self-center">
+          {MUSIC_RAIL.map((r) => {
+            const on = r.tag === activeTag;
+            const color = r.logo
+              ? (UNIT_COLORS[r.logo] ?? "var(--accent)")
+              : "var(--accent)";
+            return (
+              <button
+                key={r.tag}
+                onClick={() => setActiveTag(r.tag)}
+                className="flex h-11 items-center justify-center rounded-xl border px-2 transition"
+                style={{
+                  background: on ? "var(--panel-2)" : "var(--panel)",
+                  borderColor: on ? color : "var(--line)",
+                  boxShadow: on ? `0 0 14px -6px ${color}` : undefined,
+                  opacity: on ? 1 : 0.55,
+                }}
+                title={r.label}
+              >
+                {r.logo ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={unitLogoUrl(r.logo)}
+                    alt={r.label}
+                    className="h-7 w-full object-contain"
+                  />
+                ) : (
+                  <span className="text-[12px] font-bold uppercase tracking-wide text-[var(--text)]">
+                    {r.label}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* song list */}
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          {/* song list — roulette scroll, seamless infinite loop (rendered 3×) */}
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="music-scroll flex max-h-[600px] flex-col gap-2.5 overflow-y-auto pr-1"
+          >
+            {filtered.length === 0 ? (
+              <div className="py-8 text-center text-[13px] text-[var(--muted)]">
+                No songs match &ldquo;{query}&rdquo;.
+              </div>
+            ) : (
+              (filtered.length >= 8 ? [0, 1, 2] : [0]).map((copy) =>
+                filtered.map((s) => {
+                  const byDiff = new Map(
+                    s.results.map((r) => [r.difficulty, r]),
+                  );
+                  return (
+                    <div
+                      key={`${copy}-${s.id}`}
+                      className="music-row flex items-center gap-4 rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] p-3 transition hover:border-[var(--accent)]"
+                    >
+                      {/* jacket */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={jacketUrl(s.assetbundleName)}
+                        alt={s.title}
+                        className="h-20 w-20 flex-shrink-0 rounded-xl bg-[var(--panel)] object-cover"
+                        loading="lazy"
+                        onError={(e) => {
+                          // some jackets 404 — hide the broken image, show panel bg
+                          e.currentTarget.style.visibility = "hidden";
+                        }}
+                      />
+                      {/* title + level pips */}
+                      <div className="flex min-w-0 flex-1 flex-col justify-center gap-2">
+                        <div className="truncate text-[17px] font-bold text-[var(--text)]">
+                          {s.title}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {DIFFICULTY_ORDER.map((d) => {
+                            const r = byDiff.get(d);
+                            if (!r) return null;
+                            return (
+                              <LevelPip
+                                key={d}
+                                level={r.playLevel}
+                                result={r.playResult}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }),
+              )
+            )}
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        .music-scroll {
+          scroll-snap-type: y proximity;
+          scrollbar-width: none;         /* Firefox */
+          -ms-overflow-style: none;      /* IE/Edge */
+        }
+        .music-scroll::-webkit-scrollbar { display: none; }  /* Chrome/Safari */
+        .music-row {
+          scroll-snap-align: start;
+          animation: rouletteIn 0.5s cubic-bezier(0.22, 1.4, 0.36, 1) both;
+        }
+        @keyframes rouletteIn {
+          0%   { opacity: 0; transform: translateY(28px) scale(0.96); }
+          70%  { opacity: 1; transform: translateY(-4px) scale(1.01); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 /* ---------- summary card ---------- */
 
 function SummaryCard({
@@ -1431,11 +1776,15 @@ function SummaryCard({
 
         {activeSection === "Cards" && <CardsSection characters={characters} />}
 
-        {activeSection !== "Summary" && activeSection !== "Cards" && (
-          <div className="py-12 text-center text-[var(--muted)]">
-            {activeSection} — coming soon
-          </div>
-        )}
+        {activeSection === "Music" && <MusicSection />}
+
+        {activeSection !== "Summary" &&
+          activeSection !== "Cards" &&
+          activeSection !== "Music" && (
+            <div className="py-12 text-center text-[var(--muted)]">
+              {activeSection} — coming soon
+            </div>
+          )}
 
         {activeSection === "Summary" && (
           <>

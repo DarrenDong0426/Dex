@@ -164,3 +164,19 @@ model UserChallengeStage {
   challengeLevel Int
 }
 
+model MusicDifficulty {
+  id              Int    @id
+  musicId         Int
+  musicDifficulty String   // uppercased to match UserMusicResult ("EASY")
+  playLevel       Int
+  totalNoteCount  Int
+  @@unique([musicId, musicDifficulty])
+}
+
+model MusicTag {
+  id       Int    @id
+  musicId  Int
+  musicTag String
+  seq      Int
+  @@unique([musicId, musicTag])
+}
