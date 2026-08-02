@@ -302,6 +302,12 @@ function ProfileBanner() {
           where I keep track of the games I play. Open to friends in any game,
           just reach out.
         </p>
+        <p
+          className="text-[13px] leading-relaxed"
+          style={{ color: "var(--banner-sub)" }}
+        >
+          Current Anime: Demon Slayer Season 4
+        </p>
         <div className="mt-4 flex flex-wrap gap-2.5">
           <a
             href="https://www.instagram.com/amekage_itami/"
@@ -472,12 +478,12 @@ const UNIT_LABELS: Record<string, string> = {
   piapro: "Virtual Singer",
 };
 const UNIT_ORDER = [
+  "piapro",
   "light_sound",
   "idol",
   "street",
   "theme_park",
   "school_refusal",
-  "piapro",
 ];
 
 function CharacterGrid({ characters }: { characters: CharacterSummary[] }) {
@@ -489,6 +495,10 @@ function CharacterGrid({ characters }: { characters: CharacterSummary[] }) {
     const u = c.unit ?? "other";
     if (!byUnit.has(u)) byUnit.set(u, []);
     byUnit.get(u)!.push(c);
+  }
+  // order within each unit by characterId (matches the cards index order)
+  for (const list of byUnit.values()) {
+    list.sort((a, b) => a.characterId - b.characterId);
   }
   const units = UNIT_ORDER.filter((u) => byUnit.has(u));
 
@@ -696,6 +706,10 @@ function KizunaGrid({ characters }: { characters: CharacterSummary[] }) {
     if (!byUnit.has(u)) byUnit.set(u, []);
     byUnit.get(u)!.push(c);
   }
+  // order within each unit by characterId (matches the cards index order)
+  for (const list of byUnit.values()) {
+    list.sort((a, b) => a.characterId - b.characterId);
+  }
   const units = UNIT_ORDER.filter((u) => byUnit.has(u));
 
   return (
@@ -709,7 +723,7 @@ function KizunaGrid({ characters }: { characters: CharacterSummary[] }) {
             <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">
               {UNIT_LABELS[u] ?? u}
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
               {byUnit.get(u)!.map((c) => (
                 <div
                   key={c.characterId}
@@ -737,6 +751,123 @@ function KizunaGrid({ characters }: { characters: CharacterSummary[] }) {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Cards section: index (unit rail + character standing art) ---------- */
+
+// character-select standing cutout, keyed by characterId (EN bucket)
+function charaStandingArt(characterId: number): string {
+  return `https://storage.sekai.best/sekai-en-assets/character/character_select/chr_tl_${characterId}.webp`;
+}
+
+// unit accent colors for the index cards' bottom gradient
+const UNIT_COLORS: Record<string, string> = {
+  light_sound: "#4455dd",
+  idol: "#88dd44",
+  street: "#ee1166",
+  theme_park: "#ff9900",
+  school_refusal: "#884499",
+  piapro: "#33ccbb",
+};
+
+// unit logo (outlined) hotlinked from sekai.best. The logo filename uses
+// sekai.best's own unit slugs, which differ from our unit keys.
+const UNIT_LOGO_SLUG: Record<string, string> = {
+  piapro: "piapro",
+  light_sound: "light_sound",
+  idol: "idol",
+  street: "street",
+  theme_park: "theme_park",
+  school_refusal: "school_refusal",
+};
+function unitLogoUrl(unitKey: string): string {
+  const slug = UNIT_LOGO_SLUG[unitKey] ?? unitKey;
+  return `https://sekai.best/images/jp/logol_outline/logo_${slug}.png`;
+}
+
+function CardsSection({ characters }: { characters: CharacterSummary[] }) {
+  const [activeUnit, setActiveUnit] = useState(UNIT_ORDER[0]);
+  const [activeChar, setActiveChar] = useState<CharacterSummary | null>(null);
+
+  // characters in the selected unit, ordered by characterId
+  const unitChars = characters
+    .filter((c) => (c.unit ?? "") === activeUnit)
+    .sort((a, b) => a.characterId - b.characterId);
+
+  // TODO next step: when activeChar is set, render the card binder here
+  if (activeChar) {
+    return (
+      <div className="py-12 text-center text-[var(--muted)]">
+        {activeChar.name} — card binder coming next
+        <div>
+          <button
+            onClick={() => setActiveChar(null)}
+            className="mt-3 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-4 py-1.5 text-[12px] font-semibold text-[var(--text)]"
+          >
+            ← back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-4">
+      {/* unit rail */}
+      <div className="flex w-[150px] flex-shrink-0 flex-col gap-2">
+        {UNIT_ORDER.map((u) => {
+          const on = u === activeUnit;
+          return (
+            <button
+              key={u}
+              onClick={() => setActiveUnit(u)}
+              className="flex items-center justify-center rounded-xl border px-3 py-3 transition"
+              style={{
+                background: on ? "var(--panel-2)" : "var(--panel)",
+                borderColor: on
+                  ? (UNIT_COLORS[u] ?? "var(--accent)")
+                  : "var(--line)",
+                boxShadow: on
+                  ? `0 0 16px -6px ${UNIT_COLORS[u] ?? "var(--accent)"}`
+                  : undefined,
+                opacity: on ? 1 : 0.6,
+              }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={unitLogoUrl(u)}
+                alt={UNIT_LABELS[u] ?? u}
+                className="h-9 w-full object-contain"
+              />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* character standing-art cards — same size for all units, spread evenly */}
+      <div className="flex min-w-0 flex-1 justify-between gap-3">
+        {unitChars.map((c) => {
+          return (
+            <button
+              key={c.characterId}
+              onClick={() => setActiveChar(c)}
+              className="group relative flex aspect-[2/3] max-w-[180px] flex-1 overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] transition hover:border-[var(--accent)]"
+              title={c.name}
+            >
+              {/* standing art — full image visible, name already baked in */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={charaStandingArt(c.characterId)}
+                alt={c.name}
+                className="absolute inset-0 h-full w-full object-contain transition group-hover:scale-105"
+                loading="lazy"
+              />
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -833,7 +964,9 @@ function SummaryCard({
           )}
         </div>
 
-        {activeSection !== "Summary" && (
+        {activeSection === "Cards" && <CardsSection characters={characters} />}
+
+        {activeSection !== "Summary" && activeSection !== "Cards" && (
           <div className="py-12 text-center text-[var(--muted)]">
             {activeSection} — coming soon
           </div>

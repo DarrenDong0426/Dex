@@ -55,6 +55,15 @@ const { handleRequest } = createYoga({
         unit: String
         honorAsset: String
       }
+      type CharacterCard {
+        cardId: Int!
+        rarity: Int!
+        assetbundleName: String!
+        owned: Boolean!
+        level: Int
+        masterRank: Int
+        specialTraining: Boolean
+      }
       type SekaiSummary {
         rank: Int
         updatedAt: String
@@ -67,6 +76,7 @@ const { handleRequest } = createYoga({
         profile: Profile
         userCards: [UserCard!]!
         sekaiSummary: SekaiSummary
+        characterCards(characterId: Int!): [CharacterCard!]!
       }
     `,
     resolvers: {
@@ -104,7 +114,10 @@ const { handleRequest } = createYoga({
             }),
           ]);
 
-          // per-difficulty clear / full-combo / full-perfect counts
+          // per-difficulty counts — CUMULATIVE up the ladder, like the game:
+          //   clears      = CLEAR or better (CLEAR + FULL_COMBO + FULL_PERFECT)
+          //   fullCombos  = FULL_COMBO or better (FULL_COMBO + FULL_PERFECT)
+          //   fullPerfects = FULL_PERFECT only
           const diffMap: Record<
             string,
             { clears: number; fullCombos: number; fullPerfects: number }
@@ -117,9 +130,16 @@ const { handleRequest } = createYoga({
             });
             const n = g._count._all;
             const r = g.playResult;
-            if (r === "FULL_PERFECT") d.fullPerfects += n;
-            else if (r === "FULL_COMBO") d.fullCombos += n;
-            else if (r === "CLEAR") d.clears += n;
+            if (r === "FULL_PERFECT") {
+              d.fullPerfects += n;
+              d.fullCombos += n;
+              d.clears += n;
+            } else if (r === "FULL_COMBO") {
+              d.fullCombos += n;
+              d.clears += n;
+            } else if (r === "CLEAR") {
+              d.clears += n;
+            }
           }
           const difficulties = Object.entries(diffMap).map(
             ([difficulty, v]) => ({ difficulty, ...v }),
@@ -165,6 +185,37 @@ const { handleRequest } = createYoga({
             difficulties,
             characters,
           };
+        },
+
+        characterCards: async (
+          _: unknown,
+          { characterId }: { characterId: number },
+        ) => {
+          // all cards for this character + which ones the user owns
+          const [cards, userCards] = await Promise.all([
+            prisma.card.findMany({ where: { characterId } }),
+            prisma.userCard.findMany({ where: { card: { characterId } } }),
+          ]);
+
+          const ownedByCard = new Map(userCards.map((uc) => [uc.cardId, uc]));
+
+          return (
+            cards
+              .map((c) => {
+                const uc = ownedByCard.get(c.id);
+                return {
+                  cardId: c.id,
+                  rarity: c.rarity,
+                  assetbundleName: c.assetbundleName,
+                  owned: Boolean(uc),
+                  level: uc?.level ?? null,
+                  masterRank: uc?.masterRank ?? null,
+                  specialTraining: uc?.specialTraining ?? null,
+                };
+              })
+              // 4★ → 1★ (rarity desc), then cardId asc within a rarity
+              .sort((a, b) => b.rarity - a.rarity || a.cardId - b.cardId)
+          );
         },
       },
     },
