@@ -57,11 +57,13 @@ const { handleRequest } = createYoga({
       }
       type CharacterCard {
         cardId: Int!
+        name: String!
         rarity: Int!
         assetbundleName: String!
         owned: Boolean!
         level: Int
         masterRank: Int
+        skillLevel: Int
         specialTraining: Boolean
       }
       type SekaiSummary {
@@ -205,11 +207,13 @@ const { handleRequest } = createYoga({
                 const uc = ownedByCard.get(c.id);
                 return {
                   cardId: c.id,
+                  name: c.name,
                   rarity: c.rarity,
                   assetbundleName: c.assetbundleName,
                   owned: Boolean(uc),
                   level: uc?.level ?? null,
                   masterRank: uc?.masterRank ?? null,
+                  skillLevel: uc?.skillLevel ?? null,
                   specialTraining: uc?.specialTraining ?? null,
                 };
               })

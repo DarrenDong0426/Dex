@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { games, themes, type Game, type Mode } from "@/app/games";
 import BackgroundFX from "@/app/BackgroundFX";
 import {
@@ -194,9 +194,12 @@ function Sidebar({
 }) {
   return (
     <div className="sticky top-0 z-20 flex h-screen w-[84px] flex-shrink-0 flex-col items-center gap-3 border-r border-[var(--line)] bg-[var(--panel)] py-5 transition-colors duration-500">
-      <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#eeeeff] to-[#b0b0cc] text-lg font-extrabold text-[#1a1730]">
-        I
-      </div>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/pfp.png"
+        alt="ITAMI"
+        className="mb-2 h-12 w-12 rounded-2xl object-cover"
+      />
       <div className="mb-2 h-px w-9 bg-[var(--line)]" />
 
       {games.map((g) => {
@@ -209,7 +212,6 @@ function Sidebar({
             className={`relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-[14px] text-[15px] font-extrabold text-white transition
                         ${on ? "opacity-100" : "opacity-50 hover:opacity-85"}`}
             style={{
-              background: g.logoBg,
               boxShadow: on
                 ? "0 0 0 2px var(--panel), 0 0 0 4px var(--accent), 0 0 22px -2px var(--accent)"
                 : undefined,
@@ -230,7 +232,7 @@ function Sidebar({
               <img
                 src={g.logoSrc}
                 alt={g.name}
-                className="h-full w-full object-contain p-1.5"
+                className="h-full w-full object-contain"
               />
             ) : (
               g.logo
@@ -301,12 +303,6 @@ function ProfileBanner() {
           Developer, into software, AI, embedded systems, and anime. This is
           where I keep track of the games I play. Open to friends in any game,
           just reach out.
-        </p>
-        <p
-          className="text-[13px] leading-relaxed"
-          style={{ color: "var(--banner-sub)" }}
-        >
-          Current Anime: Demon Slayer Season 4
         </p>
         <div className="mt-4 flex flex-wrap gap-2.5">
           <a
@@ -788,6 +784,485 @@ function unitLogoUrl(unitKey: string): string {
   return `https://sekai.best/images/jp/logol_outline/logo_${slug}.png`;
 }
 
+/* ---------- card binder (a character's cards, paged, owned vs locked) ---------- */
+
+type CharacterCard = {
+  cardId: number;
+  name: string;
+  rarity: number;
+  assetbundleName: string;
+  owned: boolean;
+  level: number | null;
+  masterRank: number | null;
+  skillLevel: number | null;
+  specialTraining: boolean | null;
+};
+
+// full card illustration (JP bucket) — the whole card art, shown cropped to
+// body in a portrait frame. trained variant if the card was special-trained.
+function cardArtUrl(abn: string, trained: boolean): string {
+  const variant = trained ? "after_training" : "normal";
+  return `https://storage.sekai.best/sekai-jp-assets/character/member/${abn}/card_${variant}.webp`;
+}
+
+type SortMode = "rarity" | "owned" | "cardId";
+const PER_PAGE = 8; // cards per page (4×2)
+const PER_SPREAD = PER_PAGE * 2; // two facing pages
+
+/* ---------- card detail modal ---------- */
+
+function CardModal({
+  card,
+  characterName,
+  onClose,
+}: {
+  card: CharacterCard;
+  characterName: string;
+  onClose: () => void;
+}) {
+  // can only view trained art if the card was actually special-trained;
+  // default to the trained art when it exists
+  const canTrain = Boolean(card.specialTraining);
+  const [trained, setTrained] = useState(canTrain);
+  const [zoom, setZoom] = useState(false);
+
+  const art = cardArtUrl(card.assetbundleName, trained && canTrain);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative max-h-[92vh] w-full max-w-5xl overflow-auto rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* close */}
+        <button
+          onClick={onClose}
+          className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--panel-2)] text-[var(--text)]"
+          aria-label="close"
+        >
+          ✕
+        </button>
+
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+          {/* left: art + controls */}
+          <div className="sm:w-2/3">
+            <div className="relative overflow-hidden rounded-xl border border-[var(--line)]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={art}
+                alt={card.name}
+                className="w-full"
+                style={{
+                  filter: card.owned
+                    ? undefined
+                    : "grayscale(1) brightness(0.5)",
+                }}
+              />
+              {/* rarity stars bottom-left */}
+              <div className="absolute bottom-2 left-2 text-[16px] font-bold text-yellow-300 drop-shadow">
+                {card.rarity === 5 ? "★ BD" : "★".repeat(card.rarity)}
+              </div>
+            </div>
+
+            {/* controls: trained toggle + enlarge */}
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={() => setTrained((t) => !t)}
+                disabled={!canTrain}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--panel-2)] text-[15px] text-[var(--text)] transition hover:border-[var(--accent)] disabled:opacity-40"
+                title={
+                  canTrain
+                    ? trained
+                      ? "Show normal art"
+                      : "Show trained art"
+                    : "Card not trained"
+                }
+                aria-label="toggle trained art"
+              >
+                ⟳
+              </button>
+              <button
+                onClick={() => setZoom(true)}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--panel-2)] text-[15px] text-[var(--text)] transition hover:border-[var(--accent)]"
+                title="Enlarge"
+                aria-label="enlarge"
+              >
+                🔍
+              </button>
+            </div>
+
+            {/* side story (buttons, mirroring the game) */}
+            <div className="mt-2 flex gap-2">
+              <button className="flex-1 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1.5 text-[12px] font-semibold text-[var(--muted)]">
+                🔒 Side Story (Part 1)
+              </button>
+              <button className="flex-1 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1.5 text-[12px] font-semibold text-[var(--muted)]">
+                🔒 Side Story (Part 2)
+              </button>
+            </div>
+          </div>
+
+          {/* right: details */}
+          <div className="flex flex-col gap-4 sm:w-1/3">
+            <div>
+              <div className="text-[12px] text-[var(--muted)]">{card.name}</div>
+              <div className="text-[22px] font-extrabold text-[var(--text)]">
+                {characterName}
+              </div>
+            </div>
+
+            {card.owned ? (
+              <>
+                {/* Level */}
+                <div>
+                  <div className="text-[12px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                    Level
+                  </div>
+                  <div className="text-[16px] font-bold text-[var(--text)]">
+                    Lv. {card.level}
+                  </div>
+                </div>
+
+                {/* Skill Level */}
+                {card.skillLevel != null && (
+                  <div>
+                    <div className="text-[12px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                      Skill Level
+                    </div>
+                    <div className="text-[16px] font-bold text-[var(--text)]">
+                      Lv. {card.skillLevel}/4
+                    </div>
+                  </div>
+                )}
+
+                {/* Mastery Rank */}
+                <div>
+                  <div className="text-[12px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                    Mastery Rank
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="flex h-7 w-7 items-center justify-center rounded font-bold text-white"
+                      style={{ background: "var(--accent)" }}
+                    >
+                      {card.masterRank ?? 0}
+                    </span>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl bg-[var(--panel-2)] p-4 text-center text-[13px] text-[var(--muted)]">
+                🔒 Not yet obtained
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* enlarge overlay */}
+      {zoom && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4"
+          onClick={(e) => {
+            e.stopPropagation();
+            setZoom(false);
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={art}
+            alt={card.name}
+            className="max-h-full max-w-full rounded-lg"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// one card slot in the binder
+function CardCell({ c, onClick }: { c: CharacterCard; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="relative overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--panel)] transition hover:border-[var(--accent)]"
+      style={{ aspectRatio: "3 / 4" }}
+      title={`Card ${c.cardId}${c.owned ? ` · Lv ${c.level}` : ""}`}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={cardArtUrl(c.assetbundleName, Boolean(c.specialTraining))}
+        alt=""
+        className="h-full w-full object-cover object-top"
+        style={{ filter: c.owned ? undefined : "grayscale(1) brightness(0.4)" }}
+        loading="lazy"
+      />
+      {/* rarity stars */}
+      <div className="absolute left-1 top-1 rounded bg-black/45 px-1 text-[9px] font-bold text-yellow-300">
+        {c.rarity === 5 ? "★BD" : "★".repeat(c.rarity)}
+      </div>
+      {/* lock on un-owned */}
+      {!c.owned && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <svg
+            width="26"
+            height="26"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="white"
+            strokeWidth="2"
+            className="opacity-90 drop-shadow"
+          >
+            <rect x="3" y="11" width="18" height="11" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+        </div>
+      )}
+    </button>
+  );
+}
+
+// one page (4×2 grid of 8 slots)
+function BinderPage({
+  cards,
+  onPick,
+}: {
+  cards: CharacterCard[];
+  onPick: (c: CharacterCard) => void;
+}) {
+  return (
+    <div className="grid flex-1 grid-cols-2 gap-2 rounded-xl bg-[var(--panel-2)] p-3 sm:grid-cols-4">
+      {cards.map((c) => (
+        <CardCell key={c.cardId} c={c} onClick={() => onPick(c)} />
+      ))}
+      {/* keep grid shape when a page has fewer than 8 */}
+      {Array.from({ length: Math.max(0, PER_PAGE - cards.length) }).map(
+        (_, i) => (
+          <div key={`empty-${i}`} style={{ aspectRatio: "3 / 4" }} />
+        ),
+      )}
+    </div>
+  );
+}
+
+function CardBinder({
+  character,
+  onBack,
+}: {
+  character: CharacterSummary;
+  onBack: () => void;
+}) {
+  const [cards, setCards] = useState<CharacterCard[] | null>(null);
+  const [error, setError] = useState(false);
+  const [spread, setSpread] = useState(0);
+  const [sort, setSort] = useState<SortMode>("rarity");
+  const [flip, setFlip] = useState<null | "next" | "prev">(null);
+  const [selectedCard, setSelectedCard] = useState<CharacterCard | null>(null);
+
+  // fetch this character's full card list
+  useEffect(() => {
+    let cancelled = false;
+    setCards(null);
+    setError(false);
+    fetch("/api/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `query($id: Int!) {
+          characterCards(characterId: $id) {
+            cardId name rarity assetbundleName owned level masterRank skillLevel specialTraining
+          }
+        }`,
+        variables: { id: character.characterId },
+      }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const list = j?.data?.characterCards;
+        if (Array.isArray(list)) setCards(list);
+        else setError(true);
+      })
+      .catch(() => !cancelled && setError(true));
+    return () => {
+      cancelled = true;
+    };
+  }, [character.characterId]);
+
+  // sort the cards by the active mode
+  const sorted = (cards ?? []).slice().sort((a, b) => {
+    if (sort === "owned") {
+      if (a.owned !== b.owned) return a.owned ? -1 : 1;
+      return b.rarity - a.rarity || a.cardId - b.cardId;
+    }
+    if (sort === "cardId") return a.cardId - b.cardId;
+    // default: rarity desc, then cardId
+    return b.rarity - a.rarity || a.cardId - b.cardId;
+  });
+
+  const ownedCount = sorted.filter((c) => c.owned).length;
+  const spreadCount = Math.max(1, Math.ceil(sorted.length / PER_SPREAD));
+  const safeSpread = Math.min(spread, spreadCount - 1);
+  const spreadCards = sorted.slice(
+    safeSpread * PER_SPREAD,
+    safeSpread * PER_SPREAD + PER_SPREAD,
+  );
+  const leftCards = spreadCards.slice(0, PER_PAGE);
+  const rightCards = spreadCards.slice(PER_PAGE, PER_SPREAD);
+
+  // flip with animation, then change spread
+  function go(dir: "next" | "prev") {
+    if (flip) return;
+    if (dir === "next" && safeSpread >= spreadCount - 1) return;
+    if (dir === "prev" && safeSpread <= 0) return;
+    setFlip(dir);
+    setTimeout(() => {
+      setSpread((s) =>
+        dir === "next" ? Math.min(spreadCount - 1, s + 1) : Math.max(0, s - 1),
+      );
+      setFlip(null);
+    }, 450);
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* header: back + name + completion + sort */}
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          onClick={onBack}
+          className="rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1.5 text-[12px] font-semibold text-[var(--text)] transition hover:border-[var(--accent)]"
+        >
+          ← back
+        </button>
+        <div className="flex items-center gap-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={charaIcon(character.name)}
+            alt={character.name}
+            className="h-8 w-8 rounded-full object-cover"
+          />
+          <span className="text-[16px] font-extrabold text-[var(--text)]">
+            {character.name}
+          </span>
+        </div>
+        {cards && (
+          <span className="rounded-full bg-[var(--panel-2)] px-2.5 py-1 text-[12px] font-bold text-[var(--accent)]">
+            {ownedCount}/{sorted.length}
+          </span>
+        )}
+
+        {/* sort control */}
+        <div className="ml-auto inline-flex rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
+          {(
+            [
+              ["rarity", "Rarity"],
+              ["owned", "Owned"],
+              ["cardId", "Release"],
+            ] as [SortMode, string][]
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => {
+                setSort(m);
+                setSpread(0);
+              }}
+              className="rounded-full px-2.5 py-0.5 transition"
+              style={{
+                background: sort === m ? "var(--accent)" : "transparent",
+                color: sort === m ? "#0c0a1e" : "var(--muted)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* loading / error / binder */}
+      {error ? (
+        <div className="py-12 text-center text-[var(--muted)]">
+          Couldn&apos;t load cards.
+        </div>
+      ) : !cards ? (
+        <div className="py-12 text-center text-[var(--muted)]">Loading…</div>
+      ) : (
+        <>
+          {/* book spread — two facing pages with a 3D page-turn */}
+          <div
+            className="relative flex gap-3 rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-3"
+            style={{ perspective: "2000px" }}
+          >
+            <BinderPage cards={leftCards} onPick={setSelectedCard} />
+            <BinderPage cards={rightCards} onPick={setSelectedCard} />
+
+            {/* flipping page overlay: covers the right (next) or left (prev) half */}
+            {flip && (
+              <div
+                className="pointer-events-none absolute inset-y-3 rounded-xl bg-[var(--panel-2)]"
+                style={{
+                  left: flip === "next" ? "50%" : "0.75rem",
+                  right: flip === "next" ? "0.75rem" : "50%",
+                  transformOrigin:
+                    flip === "next" ? "left center" : "right center",
+                  animation: `${flip === "next" ? "pageNext" : "pagePrev"} 0.45s ease-in-out forwards`,
+                  backfaceVisibility: "hidden",
+                  boxShadow: "0 10px 30px -8px rgba(0,0,0,0.5)",
+                }}
+              />
+            )}
+          </div>
+
+          {/* pager */}
+          {spreadCount > 1 && (
+            <div className="flex items-center justify-center gap-4">
+              <button
+                onClick={() => go("prev")}
+                disabled={safeSpread === 0 || !!flip}
+                className="rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1 text-[13px] font-bold text-[var(--text)] disabled:opacity-40"
+              >
+                ←
+              </button>
+              <span className="text-[12px] font-semibold text-[var(--muted)]">
+                {safeSpread + 1} / {spreadCount}
+              </span>
+              <button
+                onClick={() => go("next")}
+                disabled={safeSpread === spreadCount - 1 || !!flip}
+                className="rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1 text-[13px] font-bold text-[var(--text)] disabled:opacity-40"
+              >
+                →
+              </button>
+            </div>
+          )}
+
+          <style>{`
+            @keyframes pageNext {
+              0%   { transform: rotateY(0deg); }
+              100% { transform: rotateY(-180deg); }
+            }
+            @keyframes pagePrev {
+              0%   { transform: rotateY(0deg); }
+              100% { transform: rotateY(180deg); }
+            }
+          `}</style>
+        </>
+      )}
+
+      {/* card detail modal */}
+      {selectedCard && (
+        <CardModal
+          card={selectedCard}
+          characterName={character.name}
+          onClose={() => setSelectedCard(null)}
+        />
+      )}
+    </div>
+  );
+}
+
 function CardsSection({ characters }: { characters: CharacterSummary[] }) {
   const [activeUnit, setActiveUnit] = useState(UNIT_ORDER[0]);
   const [activeChar, setActiveChar] = useState<CharacterSummary | null>(null);
@@ -797,20 +1272,10 @@ function CardsSection({ characters }: { characters: CharacterSummary[] }) {
     .filter((c) => (c.unit ?? "") === activeUnit)
     .sort((a, b) => a.characterId - b.characterId);
 
-  // TODO next step: when activeChar is set, render the card binder here
+  // when a character is selected, show their card binder
   if (activeChar) {
     return (
-      <div className="py-12 text-center text-[var(--muted)]">
-        {activeChar.name} — card binder coming next
-        <div>
-          <button
-            onClick={() => setActiveChar(null)}
-            className="mt-3 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-4 py-1.5 text-[12px] font-semibold text-[var(--text)]"
-          >
-            ← back
-          </button>
-        </div>
-      </div>
+      <CardBinder character={activeChar} onBack={() => setActiveChar(null)} />
     );
   }
 
