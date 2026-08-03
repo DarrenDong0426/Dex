@@ -87,6 +87,14 @@ const { handleRequest } = createYoga({
         unit: String
         rank: Int
       }
+      type StampItem {
+        id: Int!
+        name: String!
+        assetbundleName: String!
+        characterId: Int
+        isDuo: Boolean!
+        owned: Boolean!
+      }
       type SekaiSummary {
         rank: Int
         updatedAt: String
@@ -102,6 +110,7 @@ const { handleRequest } = createYoga({
         characterCards(characterId: Int!): [CharacterCard!]!
         musicList: [MusicSong!]!
         eventList: [EventItem!]!
+        stampList: [StampItem!]!
       }
     `,
     resolvers: {
@@ -319,6 +328,22 @@ const { handleRequest } = createYoga({
             startAt: e.startAt ? String(e.startAt.getTime()) : null,
             unit: e.unit ?? null,
             rank: rankByEvent.get(e.id) ?? null,
+          }));
+        },
+
+        stampList: async () => {
+          const [stamps, userStamps] = await Promise.all([
+            prisma.stamp.findMany({ orderBy: { id: "asc" } }),
+            prisma.userStamp.findMany(),
+          ]);
+          const owned = new Set(userStamps.map((u) => u.stampId));
+          return stamps.map((s) => ({
+            id: s.id,
+            name: s.name,
+            assetbundleName: s.assetbundleName,
+            characterId: s.characterId ?? null,
+            isDuo: s.gameCharacterUnitId == null, // null = duo stamp (222 of them)
+            owned: owned.has(s.id),
           }));
         },
       },
