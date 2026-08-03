@@ -78,6 +78,15 @@ const { handleRequest } = createYoga({
         tags: [String!]!
         results: [MusicDifficultyResult!]!
       }
+      type EventItem {
+        id: Int!
+        name: String!
+        assetbundleName: String!
+        eventType: String
+        startAt: String
+        unit: String
+        rank: Int
+      }
       type SekaiSummary {
         rank: Int
         updatedAt: String
@@ -92,6 +101,7 @@ const { handleRequest } = createYoga({
         sekaiSummary: SekaiSummary
         characterCards(characterId: Int!): [CharacterCard!]!
         musicList: [MusicSong!]!
+        eventList: [EventItem!]!
       }
     `,
     resolvers: {
@@ -236,6 +246,11 @@ const { handleRequest } = createYoga({
         },
 
         musicList: async () => {
+          // in-memory cache — catalog only changes on re-seed, so compute once
+          // and reuse across requests (cleared on server restart / redeploy).
+          const g = globalThis as { __musicListCache?: unknown };
+          if (g.__musicListCache) return g.__musicListCache;
+
           const [songs, results, difficulties, tags] = await Promise.all([
             prisma.music.findMany({ orderBy: { id: "asc" } }),
             prisma.userMusicResult.findMany(),
@@ -269,7 +284,7 @@ const { handleRequest } = createYoga({
             tagsByMusic.get(t.musicId)!.push(t.musicTag);
           }
 
-          return songs.map((s) => {
+          const out = songs.map((s) => {
             const diffs = diffsByMusic.get(s.id) ?? [];
             return {
               id: s.id,
@@ -283,6 +298,28 @@ const { handleRequest } = createYoga({
               })),
             };
           });
+
+          (globalThis as { __musicListCache?: unknown }).__musicListCache = out;
+          return out;
+        },
+
+        eventList: async () => {
+          const [events, userEvents] = await Promise.all([
+            prisma.event.findMany({ orderBy: { startAt: "desc" } }),
+            prisma.userEvent.findMany(),
+          ]);
+          const rankByEvent = new Map(
+            userEvents.map((u) => [u.eventId, u.rank]),
+          );
+          return events.map((e) => ({
+            id: e.id,
+            name: e.name,
+            assetbundleName: e.assetbundleName,
+            eventType: e.eventType,
+            startAt: e.startAt ? String(e.startAt.getTime()) : null,
+            unit: e.unit ?? null,
+            rank: rankByEvent.get(e.id) ?? null,
+          }));
         },
       },
     },

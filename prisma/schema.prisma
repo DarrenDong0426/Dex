@@ -101,6 +101,7 @@ model Event {
   eventType          String
   startAt            DateTime
   userEvents         UserEvent[]
+  unit String?
 }
 
 model UserEvent {

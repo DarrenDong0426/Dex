@@ -1414,41 +1414,69 @@ const MUSIC_RAIL: { tag: string; label: string; logo?: string }[] = [
   { tag: "other", label: "Other" },
 ];
 
+// session cache so re-opening the Music tab doesn't refetch the whole catalog
+let MUSIC_CACHE: MusicSong[] | null = null;
+
+const ROW_H = 104; // fixed row height incl. gap, for virtualization
+
+function MusicRow({ s }: { s: MusicSong }) {
+  const byDiff = new Map(s.results.map((r) => [r.difficulty, r]));
+  return (
+    <div className="flex items-center gap-4 rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] p-3 transition hover:border-[var(--accent)]">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={jacketUrl(s.assetbundleName)}
+        alt={s.title}
+        className="h-20 w-20 flex-shrink-0 rounded-xl bg-[var(--panel)] object-cover"
+        loading="lazy"
+        onError={(e) => {
+          e.currentTarget.style.visibility = "hidden";
+        }}
+      />
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-2">
+        <div className="truncate text-[17px] font-bold text-[var(--text)]">
+          {s.title}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {DIFFICULTY_ORDER.map((d) => {
+            const r = byDiff.get(d);
+            if (!r) return null;
+            return (
+              <LevelPip key={d} level={r.playLevel} result={r.playResult} />
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MusicSection() {
-  const [songs, setSongs] = useState<MusicSong[] | null>(null);
+  const [songs, setSongs] = useState<MusicSong[] | null>(MUSIC_CACHE);
   const [error, setError] = useState(false);
   const [query, setQuery] = useState("");
   const [activeTag, setActiveTag] = useState("all");
   const [status, setStatus] = useState("all");
   const [diffFilter, setDiffFilter] = useState("all");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const VIEWPORT_H = 600;
 
-  // seamless infinite loop: the list is rendered 3× stacked. Keep the scroll
-  // position within the MIDDLE copy; when it drifts into the first or last
-  // copy, jump back by one copy-height so it wraps without a visible seam.
   function handleScroll() {
     const el = scrollRef.current;
-    if (!el || filtered.length < 8) return;
-    const copy = el.scrollHeight / 3;
-    if (el.scrollTop < copy * 0.5) {
-      el.scrollTop += copy;
-    } else if (el.scrollTop > copy * 1.5) {
-      el.scrollTop -= copy;
-    }
+    if (el) setScrollTop(el.scrollTop);
   }
 
-  // start in the middle copy once songs load (only when tripled for looping)
+  // reset to top when filters change
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && filtered.length >= 8) {
-      el.scrollTop = el.scrollHeight / 3;
-    } else if (el) {
-      el.scrollTop = 0;
-    }
+    if (el) el.scrollTop = 0;
+    setScrollTop(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [songs, activeTag, query, status, diffFilter]);
 
   useEffect(() => {
+    if (MUSIC_CACHE) return; // already loaded this session
     let cancelled = false;
     fetch("/api/graphql", {
       method: "POST",
@@ -1461,8 +1489,10 @@ function MusicSection() {
       .then((j) => {
         if (cancelled) return;
         const list = j?.data?.musicList;
-        if (Array.isArray(list)) setSongs(list);
-        else setError(true);
+        if (Array.isArray(list)) {
+          MUSIC_CACHE = list;
+          setSongs(list);
+        } else setError(true);
       })
       .catch(() => !cancelled && setError(true));
     return () => {
@@ -1558,6 +1588,10 @@ function MusicSection() {
             </button>
           ))}
         </div>
+
+        <span className="ml-auto text-[12px] font-semibold text-[var(--muted)]">
+          {filtered.length} {filtered.length === 1 ? "song" : "songs"}
+        </span>
       </div>
 
       {/* rail (centered) + song list */}
@@ -1601,62 +1635,46 @@ function MusicSection() {
 
         {/* song list */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          {/* song list — roulette scroll, seamless infinite loop (rendered 3×) */}
+          {/* virtualized infinite roulette: only visible rows are rendered */}
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="music-scroll flex max-h-[600px] flex-col gap-2.5 overflow-y-auto pr-1"
+            className="music-scroll relative overflow-y-auto"
+            style={{ height: VIEWPORT_H }}
           >
             {filtered.length === 0 ? (
               <div className="py-8 text-center text-[13px] text-[var(--muted)]">
-                No songs match &ldquo;{query}&rdquo;.
+                No songs matched.
               </div>
             ) : (
-              (filtered.length >= 8 ? [0, 1, 2] : [0]).map((copy) =>
-                filtered.map((s) => {
-                  const byDiff = new Map(
-                    s.results.map((r) => [r.difficulty, r]),
-                  );
-                  return (
+              (() => {
+                const n = filtered.length;
+                // big virtual height so you can scroll a long way in both directions
+                const LOOPS = n < 8 ? 1 : 1000;
+                const totalH = n * ROW_H * LOOPS;
+                const first = Math.max(0, Math.floor(scrollTop / ROW_H) - 2);
+                const visibleCount = Math.ceil(VIEWPORT_H / ROW_H) + 4;
+                const rows = [];
+                for (let i = first; i < first + visibleCount; i++) {
+                  const top = i * ROW_H;
+                  if (top >= totalH) break;
+                  const s = filtered[((i % n) + n) % n]; // wrap index for looping
+                  rows.push(
                     <div
-                      key={`${copy}-${s.id}`}
-                      className="music-row flex items-center gap-4 rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] p-3 transition hover:border-[var(--accent)]"
+                      key={i}
+                      className="absolute left-0 right-2"
+                      style={{ top, height: ROW_H - 10 }}
                     >
-                      {/* jacket */}
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={jacketUrl(s.assetbundleName)}
-                        alt={s.title}
-                        className="h-20 w-20 flex-shrink-0 rounded-xl bg-[var(--panel)] object-cover"
-                        loading="lazy"
-                        onError={(e) => {
-                          // some jackets 404 — hide the broken image, show panel bg
-                          e.currentTarget.style.visibility = "hidden";
-                        }}
-                      />
-                      {/* title + level pips */}
-                      <div className="flex min-w-0 flex-1 flex-col justify-center gap-2">
-                        <div className="truncate text-[17px] font-bold text-[var(--text)]">
-                          {s.title}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {DIFFICULTY_ORDER.map((d) => {
-                            const r = byDiff.get(d);
-                            if (!r) return null;
-                            return (
-                              <LevelPip
-                                key={d}
-                                level={r.playLevel}
-                                result={r.playResult}
-                              />
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
+                      <MusicRow s={s} />
+                    </div>,
                   );
-                }),
-              )
+                }
+                return (
+                  <div style={{ height: totalH, position: "relative" }}>
+                    {rows}
+                  </div>
+                );
+              })()
             )}
           </div>
         </div>
@@ -1664,20 +1682,249 @@ function MusicSection() {
 
       <style>{`
         .music-scroll {
-          scroll-snap-type: y proximity;
-          scrollbar-width: none;         /* Firefox */
-          -ms-overflow-style: none;      /* IE/Edge */
+          scrollbar-width: none;
+          -ms-overflow-style: none;
         }
-        .music-scroll::-webkit-scrollbar { display: none; }  /* Chrome/Safari */
-        .music-row {
-          scroll-snap-align: start;
-          animation: rouletteIn 0.5s cubic-bezier(0.22, 1.4, 0.36, 1) both;
-        }
-        @keyframes rouletteIn {
-          0%   { opacity: 0; transform: translateY(28px) scale(0.96); }
-          70%  { opacity: 1; transform: translateY(-4px) scale(1.01); }
-          100% { opacity: 1; transform: translateY(0) scale(1); }
-        }
+        .music-scroll::-webkit-scrollbar { display: none; }
+      `}</style>
+    </div>
+  );
+}
+
+/* ---------- Events section ---------- */
+
+type EventItem = {
+  id: number;
+  name: string;
+  assetbundleName: string;
+  eventType: string | null;
+  startAt: string | null;
+  unit: string | null;
+  rank: number | null;
+};
+
+// event logo (banner) art
+function eventLogoUrl(abn: string): string {
+  return `https://storage.sekai.best/sekai-en-assets/event/${abn}/logo/logo.webp`;
+}
+// event background art
+function eventBgUrl(abn: string): string {
+  return `https://storage.sekai.best/sekai-en-assets/event/${abn}/screen/bg.webp`;
+}
+// event character cutout (foreground figure)
+function eventCharacterUrl(abn: string): string {
+  return `https://storage.sekai.best/sekai-en-assets/event/${abn}/screen/character.webp`;
+}
+
+// map an exact final rank to its "Top X" tier (Sekai reward borders)
+function rankRange(rank: number): string {
+  const borders = [
+    10, 50, 100, 500, 1000, 2000, 3000, 5000, 10000, 20000, 30000, 50000,
+    100000,
+  ];
+  for (const b of borders) {
+    if (rank <= b) return `Top ${b.toLocaleString()}`;
+  }
+  return `Top 100,000+`;
+}
+
+let EVENT_CACHE: EventItem[] | null = null;
+
+// event unit → rail tag (events use "none" for VS/mixed)
+const EVENT_RAIL: { key: string; label: string; logo?: string }[] = [
+  { key: "all", label: "All" },
+  { key: "piapro", label: "Virtual Singer", logo: "piapro" },
+  { key: "light_sound", label: "Leo/need", logo: "light_sound" },
+  { key: "idol", label: "MORE MORE JUMP!", logo: "idol" },
+  { key: "street", label: "Vivid BAD SQUAD", logo: "street" },
+  { key: "theme_park", label: "Wonderlands×Showtime", logo: "theme_park" },
+  {
+    key: "school_refusal",
+    label: "Nightcord at 25:00",
+    logo: "school_refusal",
+  },
+  { key: "none", label: "Other" },
+];
+
+function EventsSection() {
+  const [events, setEvents] = useState<EventItem[] | null>(EVENT_CACHE);
+  const [error, setError] = useState(false);
+  const [activeUnit, setActiveUnit] = useState("all");
+  const [hovered, setHovered] = useState<EventItem | null>(
+    EVENT_CACHE && EVENT_CACHE.length ? EVENT_CACHE[0] : null,
+  );
+
+  // when the unit filter changes, default the preview to the first event in
+  // the filtered list (so the background/rank isn't stale or blank)
+  useEffect(() => {
+    if (!events) return;
+    const list = events.filter(
+      (e) => activeUnit === "all" || (e.unit ?? "none") === activeUnit,
+    );
+    setHovered(list.length ? list[0] : null);
+  }, [activeUnit, events]);
+
+  useEffect(() => {
+    if (EVENT_CACHE) return;
+    let cancelled = false;
+    fetch("/api/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `{ eventList { id name assetbundleName eventType startAt unit rank } }`,
+      }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const list = j?.data?.eventList;
+        if (Array.isArray(list)) {
+          EVENT_CACHE = list;
+          setEvents(list);
+        } else setError(true);
+      })
+      .catch(() => !cancelled && setError(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error)
+    return (
+      <div className="py-12 text-center text-[var(--muted)]">
+        Couldn&apos;t load events.
+      </div>
+    );
+  if (!events)
+    return (
+      <div className="py-12 text-center text-[var(--muted)]">Loading…</div>
+    );
+
+  const filtered = events.filter(
+    (e) => activeUnit === "all" || (e.unit ?? "none") === activeUnit,
+  );
+
+  return (
+    <div className="relative min-h-[560px] overflow-hidden rounded-2xl">
+      {/* background = hovered event art — right band, edge softened by mask */}
+      {hovered && (
+        <div className="pointer-events-none absolute inset-0 overflow-hidden">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={eventBgUrl(hovered.assetbundleName)}
+            alt=""
+            className="absolute inset-y-0 right-0 h-full w-[55%] object-cover opacity-90 transition-opacity duration-500"
+            style={{
+              objectPosition:
+                hovered.eventType === "world_bloom" ? "0% center" : "center",
+              WebkitMaskImage:
+                "linear-gradient(to right, transparent, black 35%)",
+              maskImage: "linear-gradient(to right, transparent, black 35%)",
+            }}
+          />
+        </div>
+      )}
+
+      {/* rank — single spot, lower-right of the background */}
+      {hovered && (
+        <div className="absolute bottom-5 right-6 z-30 text-right">
+          {hovered.rank != null ? (
+            <>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-white/70 drop-shadow">
+                Your Rank
+              </div>
+              <div
+                className="text-[26px] font-extrabold drop-shadow-lg"
+                style={{ color: "var(--accent)" }}
+              >
+                {rankRange(hovered.rank)}
+              </div>
+            </>
+          ) : (
+            <div className="text-[15px] font-semibold text-white/70 drop-shadow">
+              Unranked
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="relative z-20 flex gap-4 p-2">
+        {/* unit rail */}
+        <div className="flex w-[120px] flex-shrink-0 flex-col gap-2 self-center">
+          {EVENT_RAIL.map((r) => {
+            const on = r.key === activeUnit;
+            const color = r.logo
+              ? (UNIT_COLORS[r.logo] ?? "var(--accent)")
+              : "var(--accent)";
+            return (
+              <button
+                key={r.key}
+                onClick={() => setActiveUnit(r.key)}
+                className="flex h-11 items-center justify-center rounded-xl border px-2 transition"
+                style={{
+                  background: on ? "var(--panel-2)" : "var(--panel)",
+                  borderColor: on ? color : "var(--line)",
+                  boxShadow: on ? `0 0 14px -6px ${color}` : undefined,
+                  opacity: on ? 1 : 0.55,
+                }}
+                title={r.label}
+              >
+                {r.logo ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={unitLogoUrl(r.logo)}
+                    alt={r.label}
+                    className="h-6 w-full object-contain"
+                  />
+                ) : (
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-[var(--text)]">
+                    {r.label}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* event banner list — fixed-width column, doesn't stretch right */}
+        <div className="event-scroll flex max-h-[540px] w-[340px] flex-shrink-0 flex-col gap-3 overflow-y-auto pr-1">
+          {filtered.map((e) => (
+            <button
+              key={e.id}
+              onMouseEnter={() => setHovered(e)}
+              className="aspect-[5/2] w-full flex-shrink-0 overflow-hidden rounded-2xl border transition"
+              style={{
+                borderColor:
+                  hovered?.id === e.id ? "var(--accent)" : "var(--line)",
+                boxShadow:
+                  hovered?.id === e.id
+                    ? "0 0 16px -6px var(--accent)"
+                    : undefined,
+              }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={eventLogoUrl(e.assetbundleName)}
+                alt={e.name}
+                className="h-full w-full object-cover"
+                loading="lazy"
+                onError={(ev) => {
+                  ev.currentTarget.style.visibility = "hidden";
+                }}
+              />
+            </button>
+          ))}
+          {filtered.length === 0 && (
+            <div className="py-8 text-center text-[13px] text-[var(--muted)]">
+              No events.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <style>{`
+        .event-scroll { scrollbar-width: none; -ms-overflow-style: none; }
+        .event-scroll::-webkit-scrollbar { display: none; }
       `}</style>
     </div>
   );
@@ -1778,9 +2025,12 @@ function SummaryCard({
 
         {activeSection === "Music" && <MusicSection />}
 
+        {activeSection === "Events" && <EventsSection />}
+
         {activeSection !== "Summary" &&
           activeSection !== "Cards" &&
-          activeSection !== "Music" && (
+          activeSection !== "Music" &&
+          activeSection !== "Events" && (
             <div className="py-12 text-center text-[var(--muted)]">
               {activeSection} — coming soon
             </div>
