@@ -8,6 +8,7 @@ type MasterHonor = {
   name: string;
   assetbundleName: string;
   honorRarity: string;
+  groupId: number;
 };
 
 export async function GET() {
@@ -22,20 +23,23 @@ export async function GET() {
 
     const honors = (await res.json()) as MasterHonor[];
 
-    const data = honors
-      .filter((h) => h.name && h.assetbundleName)
-      .map((h) => ({
-        id: h.id,
-        name: h.name,
-        assetbundleName: h.assetbundleName,
-        honorRarity: h.honorRarity,
-      }));
+    const data = honors.filter((h) => h.name && h.assetbundleName);
 
-    const result = await prisma.honor.createMany({
-      data,
-      skipDuplicates: true,
-    });
-    return Response.json({ fetched: honors.length, inserted: result.count });
+    for (const h of data) {
+      await prisma.honor.upsert({
+        where: { id: h.id },
+        update: { groupId: h.groupId ?? null },
+        create: {
+          id: h.id,
+          name: h.name,
+          assetbundleName: h.assetbundleName,
+          honorRarity: h.honorRarity,
+          groupId: h.groupId ?? null,
+        },
+      });
+    }
+
+    return Response.json({ fetched: honors.length, upserted: data.length });
   } catch (err) {
     console.error("Honor seed failed:", err);
     return Response.json({ error: String(err) }, { status: 500 });

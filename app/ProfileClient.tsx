@@ -588,7 +588,7 @@ function HonorBadge({
       <img
         src={honorFrameUrl(honor.rarity)}
         alt=""
-        className="pointer-events-none absolute inset-0 h-[28px] w-full object-fill"
+        className="pointer-events-none absolute left-0 top-0 h-[28px] w-auto"
         loading="lazy"
       />
       {/* pips — always 5 past rank 25; recolored left→right per 25-band */}
@@ -719,7 +719,7 @@ function KizunaGrid({ characters }: { characters: CharacterSummary[] }) {
             <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-[var(--muted)]">
               {UNIT_LABELS[u] ?? u}
             </div>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
               {byUnit.get(u)!.map((c) => (
                 <div
                   key={c.characterId}
@@ -2170,6 +2170,524 @@ function StampsSection({ characters }: { characters: CharacterSummary[] }) {
   );
 }
 
+/* ---------- Honors section ---------- */
+
+type HonorItem = {
+  id: number;
+  name: string;
+  assetbundleName: string;
+  honorRarity: string | null;
+  category: string | null;
+  groupName: string | null;
+  eventAbn: string | null;
+  eventType: string | null;
+  level: number | null;
+  owned: boolean;
+};
+type BondHonorItem = {
+  id: number;
+  name: string;
+  characterId1: number | null;
+  characterId2: number | null;
+  bondsGroupId: number | null;
+  honorRarity: string | null;
+  level: number | null;
+  owned: boolean;
+};
+
+let HONOR_CACHE: HonorItem[] | null = null;
+let BOND_CACHE: BondHonorItem[] | null = null;
+
+// bond honor badge — replicates sekai.best's SVG composite exactly:
+// 380×80, two unit-colored halves, white rounded border, both character
+// chr_sd cutouts, and the honor-name word plate.
+function bondCharUrl(unitId: number): string {
+  const p = String(unitId).padStart(2, "0");
+  return `https://storage.sekai.best/sekai-jp-assets/bonds_honor/character/chr_sd_${p}_01.webp`;
+}
+function bondWordUrl(bondsGroupId: number): string {
+  const g = String(bondsGroupId % 10000).padStart(4, "0");
+  return `https://storage.sekai.best/sekai-jp-assets/bonds_honor/word/honorname_${g}_01_01.webp`;
+}
+// unit color by character/unit id (reuse UNIT_COLORS via unit lookup)
+function unitColorForCharId(charId: number): string {
+  const unit =
+    charId <= 4
+      ? "light_sound"
+      : charId <= 8
+        ? "idol"
+        : charId <= 12
+          ? "street"
+          : charId <= 16
+            ? "theme_park"
+            : charId <= 20
+              ? "school_refusal"
+              : "piapro";
+  return UNIT_COLORS[unit] ?? "#888";
+}
+
+function BondHonorBadge({ bond }: { bond: BondHonorItem }) {
+  if (
+    bond.characterId1 == null ||
+    bond.characterId2 == null ||
+    bond.bondsGroupId == null
+  )
+    return null;
+  const c1 = unitColorForCharId(bond.characterId1);
+  const c2 = unitColorForCharId(bond.characterId2);
+  return (
+    <svg viewBox="0 0 380 80" className="h-[56px] w-auto">
+      <defs>
+        <clipPath id={`bondclip-${bond.id}`}>
+          <rect x="0" y="0" width="380" height="80" rx="34" />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#bondclip-${bond.id})`}>
+        <rect x="0" y="0" width="190" height="80" fill={c1} />
+        <rect x="190" y="0" width="190" height="80" fill={c2} />
+        <image
+          href={bondCharUrl(bond.characterId1)}
+          x="20"
+          y="-12"
+          width="108"
+          height="105"
+        />
+        <image
+          href={bondCharUrl(bond.characterId2)}
+          x="232"
+          y="-8"
+          width="128"
+          height="101"
+        />
+        <image href={bondWordUrl(bond.bondsGroupId)} x="121" y="12" />
+      </g>
+      <rect
+        x="16"
+        y="6"
+        width="348"
+        height="68"
+        rx="34"
+        stroke="white"
+        strokeWidth="8"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
+const RARITY_ORDER = ["low", "middle", "high", "highest"];
+const RARITY_TIER: Record<string, number> = {
+  low: 1,
+  middle: 2,
+  high: 3,
+  highest: 4,
+};
+
+// event honor rank → frame tier (1-4). highest=Top 3, high=Top 1k,
+// middle=Top 10k, low=rest. Parses the rank from the honor name
+// ("1st"/"2nd"/"3rd" or "Top 1,000").
+function eventFrameTier(name: string): number {
+  const ord = name.match(/^(\d+)(?:st|nd|rd|th)/i); // "1st", "2nd"...
+  const top = name.match(/top\s*([\d,]+)/i); // "Top 1,000"
+  const rank = ord
+    ? parseInt(ord[1], 10)
+    : top
+      ? parseInt(top[1].replace(/,/g, ""), 10)
+      : Infinity;
+  if (rank <= 3) return 4; // highest
+  if (rank <= 1000) return 3; // high
+  if (rank <= 10000) return 2; // middle
+  return 1; // low
+}
+
+// event rank tiers, in order — each maps to a sequential rank_main image
+// starting at honor_0182 (index 0) through honor_0205 (index 23).
+const EVENT_RANK_TIERS = [
+  1, 2, 3, 10, 20, 30, 40, 50, 100, 200, 300, 400, 500, 1000, 2000, 3000, 4000,
+  5000, 10000, 20000, 30000, 40000, 50000, 100000,
+];
+// honor name ("1st" / "Top 2,000") → rank_main.webp URL for that tier's number
+function eventRankImageUrl(name: string): string | null {
+  const ord = name.match(/^(\d+)(?:st|nd|rd|th)/i);
+  const top = name.match(/top\s*([\d,]+)/i);
+  const rank = ord
+    ? parseInt(ord[1], 10)
+    : top
+      ? parseInt(top[1].replace(/,/g, ""), 10)
+      : null;
+  if (rank == null) return null;
+  const idx = EVENT_RANK_TIERS.indexOf(rank);
+  if (idx < 0) return null;
+  const n = String(182 + idx).padStart(4, "0");
+  return `https://storage.sekai.best/sekai-en-assets/honor/honor_${n}/rank_main.webp`;
+}
+
+// honor level (1-10) → pip image srcs. 1-5 = that many bronze/teal pips;
+// 6-10 = 5 purple pips (higher tier). Reuses the /pips gems.
+function honorLevelPips(level: number): string[] {
+  const n = Math.min(5, level <= 5 ? level : 5);
+  const src = level <= 5 ? "/pips/pip_blue.png" : "/pips/pip_purple.png";
+  return Array.from({ length: n }, () => src);
+}
+
+function HonorsSection() {
+  const [tab, setTab] = useState<"general" | "bond">("general");
+  const [honors, setHonors] = useState<HonorItem[] | null>(HONOR_CACHE);
+  const [bonds, setBonds] = useState<BondHonorItem[] | null>(BOND_CACHE);
+  const [error, setError] = useState(false);
+  const [ownFilter, setOwnFilter] = useState<"all" | "owned" | "missing">(
+    "all",
+  );
+  const [catFilter, setCatFilter] = useState<string>("all");
+
+  useEffect(() => {
+    if (HONOR_CACHE && BOND_CACHE) return;
+    let cancelled = false;
+    fetch("/api/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `{
+          honorList { id name assetbundleName honorRarity category groupName eventAbn eventType level owned }
+          bondHonorList { id name characterId1 characterId2 bondsGroupId honorRarity level owned }
+        }`,
+      }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const h = j?.data?.honorList;
+        const b = j?.data?.bondHonorList;
+        if (Array.isArray(h) && Array.isArray(b)) {
+          HONOR_CACHE = h;
+          BOND_CACHE = b;
+          setHonors(h);
+          setBonds(b);
+        } else setError(true);
+      })
+      .catch(() => !cancelled && setError(true));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error)
+    return (
+      <div className="py-12 text-center text-[var(--muted)]">
+        Couldn&apos;t load honors.
+      </div>
+    );
+  if (!honors || !bonds)
+    return (
+      <div className="py-12 text-center text-[var(--muted)]">Loading…</div>
+    );
+
+  const isBirthday = (h: HonorItem) =>
+    /^happy (birthday|anniversary)/i.test(h.name);
+  // effective category: birthday → own category; event honors → split by their
+  // event type (World Link / Marathon / Cheerful Carnival); else honorType
+  const EVENT_TYPE_LABEL: Record<string, string> = {
+    world_bloom: "World Link",
+    marathon: "Marathon",
+    cheerful_carnival: "Cheerful Carnival",
+  };
+  const catOf = (h: HonorItem) => {
+    if (isBirthday(h)) return "birthday";
+    if (h.category === "event" && h.eventType)
+      return EVENT_TYPE_LABEL[h.eventType] ?? "event";
+    return h.category;
+  };
+
+  const source: (HonorItem | BondHonorItem)[] =
+    tab === "general" ? honors : bonds;
+
+  // distinct categories present (general tab only), birthday surfaced as its own
+  const categories = Array.from(
+    new Set(honors.map((h) => catOf(h)).filter((c): c is string => Boolean(c))),
+  ).sort();
+
+  const filtered = source.filter((h) => {
+    if (ownFilter === "owned" && !h.owned) return false;
+    if (ownFilter === "missing" && h.owned) return false;
+    if (
+      tab === "general" &&
+      catFilter !== "all" &&
+      catOf(h as HonorItem) !== catFilter
+    )
+      return false;
+    return true;
+  });
+
+  const scope = source.filter(
+    (h) =>
+      tab !== "general" ||
+      catFilter === "all" ||
+      catOf(h as HonorItem) === catFilter,
+  );
+  const ownedCount = scope.filter((h) => h.owned).length;
+  const pct = scope.length ? Math.round((ownedCount / scope.length) * 100) : 0;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* general / bond toggle */}
+      <div className="inline-flex self-start rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[12px] font-semibold">
+        {(
+          [
+            ["general", "General"],
+            ["bond", "Bond"],
+          ] as ["general" | "bond", string][]
+        ).map(([v, label]) => (
+          <button
+            key={v}
+            onClick={() => setTab(v)}
+            className="rounded-full px-3.5 py-1 transition"
+            style={{
+              background: tab === v ? "var(--accent)" : "transparent",
+              color: tab === v ? "#0c0a1e" : "var(--muted)",
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ownership + rarity filters + completion */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
+          {(
+            [
+              ["all", "All"],
+              ["owned", "Owned"],
+              ["missing", "Missing"],
+            ] as [typeof ownFilter, string][]
+          ).map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setOwnFilter(v)}
+              className="rounded-full px-2.5 py-1 transition"
+              style={{
+                background: ownFilter === v ? "var(--accent)" : "transparent",
+                color: ownFilter === v ? "#0c0a1e" : "var(--muted)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* category filter — general honors only */}
+        {tab === "general" && categories.length > 0 && (
+          <div className="inline-flex flex-wrap gap-1 rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
+            {["all", ...categories].map((c) => (
+              <button
+                key={c}
+                onClick={() => setCatFilter(c)}
+                className="rounded-full px-2.5 py-1 capitalize transition"
+                style={{
+                  background: catFilter === c ? "var(--accent)" : "transparent",
+                  color: catFilter === c ? "#0c0a1e" : "var(--muted)",
+                }}
+              >
+                {c === "all" ? "All" : c.replace(/_/g, " ")}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="ml-auto flex items-center gap-2">
+          <div className="h-2 w-28 overflow-hidden rounded-full bg-[var(--panel-2)]">
+            <div
+              className="h-full rounded-full"
+              style={{ width: `${pct}%`, background: "var(--accent)" }}
+            />
+          </div>
+          <span className="text-[12px] font-bold text-[var(--text)]">
+            {ownedCount}/{scope.length}
+          </span>
+        </div>
+      </div>
+
+      {/* honor grid */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {filtered.map((h) => (
+          <div
+            key={h.id}
+            className="relative flex flex-col items-start gap-2 overflow-hidden p-2.5"
+            style={{ opacity: h.owned ? 1 : 0.45 }}
+            title={h.name}
+          >
+            {tab === "general" &&
+              "assetbundleName" in h &&
+              (() => {
+                const abn = (h as HonorItem).assetbundleName;
+                // generic ranking-tier asset names (honor_top_*, honor_memorial)
+                // have NO real badge art — render a text pill instead
+                const isGeneric = /^honor_(top_|memorial)/.test(abn);
+                if (isGeneric) {
+                  // WL honors carry the full event+chapter in the name → 3-layer
+                  // composite. Normal ranking + memorial honors are BARE
+                  // (honor_top_020000 / honor_memorial) → use the event's own bg
+                  // via eventAbn (group→event join).
+                  const m = abn.match(
+                    /^(honor_(?:top_\d+|memorial))_(event_.+)$/,
+                  );
+                  if (m) {
+                    const tierPart = m[1];
+                    const eventChapter = m[2];
+                    return (
+                      <svg
+                        viewBox="0 0 380 80"
+                        className="h-[56px] w-auto flex-shrink-0"
+                      >
+                        <image
+                          href={`https://storage.sekai.best/sekai-en-assets/honor/honor_bg_${eventChapter}/degree_main.webp`}
+                          x="0"
+                          y="0"
+                          width="380"
+                          height="80"
+                        />
+                        <image
+                          href={`https://storage.sekai.best/sekai-en-assets/honor/${tierPart}_${eventChapter}/rank_main.webp`}
+                          x="0"
+                          y="0"
+                          width="380"
+                          height="80"
+                        />
+                      </svg>
+                    );
+                  }
+                  // bare honor → use the event's own bg via eventAbn
+                  const evAbn = (h as HonorItem).eventAbn;
+                  if (evAbn) {
+                    const base = evAbn.replace(/_\d{4}$/, ""); // strip trailing year
+                    return (
+                      <svg
+                        viewBox="0 0 380 80"
+                        className="h-[56px] w-auto flex-shrink-0"
+                      >
+                        <image
+                          href={`https://storage.sekai.best/sekai-jp-assets/honor/honor_bg_${base}/degree_main.webp`}
+                          x="0"
+                          y="0"
+                          width="380"
+                          height="80"
+                        />
+                        {eventFrameTier(h.name) > 1 && (
+                          <image
+                            href={`/honor-frames/frame_degree_m_${eventFrameTier(h.name)}.png`}
+                            x="0"
+                            y="0"
+                            width="380"
+                            height="80"
+                          />
+                        )}
+                        {eventRankImageUrl(h.name) && (
+                          <image
+                            href={eventRankImageUrl(h.name)!}
+                            x="250"
+                            y="18"
+                            width="120"
+                            height="44"
+                          />
+                        )}
+                      </svg>
+                    );
+                  }
+                  // no event match → text pill fallback
+                  return (
+                    <div
+                      className="flex h-[56px] flex-shrink-0 items-center justify-center rounded-full border-2 border-white/70 px-3 text-center"
+                      style={{
+                        aspectRatio: "380 / 80",
+                        background:
+                          "linear-gradient(135deg, var(--accent), var(--panel-2))",
+                      }}
+                    >
+                      <span className="line-clamp-2 text-[12px] font-extrabold text-white drop-shadow">
+                        {(h as HonorItem).groupName ?? h.name}
+                      </span>
+                    </div>
+                  );
+                }
+                return (
+                  <svg
+                    viewBox="0 0 380 80"
+                    className="h-[56px] w-auto flex-shrink-0"
+                  >
+                    <image
+                      href={honorImageUrl(abn)}
+                      x="0"
+                      y="0"
+                      width="380"
+                      height="80"
+                    />
+                    {(h as HonorItem).category === "character" &&
+                      h.honorRarity && (
+                        <image
+                          href={honorFrameUrl(
+                            h.honorRarity as
+                              | "low"
+                              | "middle"
+                              | "high"
+                              | "highest",
+                          )}
+                          x="0"
+                          y="0"
+                          width="380"
+                          height="80"
+                        />
+                      )}
+                    {(h as HonorItem).category === "event" &&
+                      !isBirthday(h as HonorItem) &&
+                      eventFrameTier(h.name) > 1 && (
+                        <image
+                          href={`/honor-frames/frame_degree_m_${eventFrameTier(h.name)}.png`}
+                          x="0"
+                          y="0"
+                          width="380"
+                          height="80"
+                        />
+                      )}
+                    {(h as HonorItem).category === "event" &&
+                      !isBirthday(h as HonorItem) &&
+                      eventRankImageUrl(h.name) && (
+                        <image
+                          href={eventRankImageUrl(h.name)!}
+                          x="250"
+                          y="18"
+                          width="120"
+                          height="44"
+                        />
+                      )}
+                  </svg>
+                );
+              })()}
+            {tab === "bond" && <BondHonorBadge bond={h as BondHonorItem} />}
+            <div className="min-w-0 flex-1">
+              <div className="line-clamp-2 text-[13px] font-bold leading-snug text-[var(--text)]">
+                {tab === "general" &&
+                (h as HonorItem).category === "event" &&
+                !isBirthday(h as HonorItem) &&
+                (h as HonorItem).groupName
+                  ? `${(h as HonorItem).groupName} — ${h.name}`
+                  : h.name}
+              </div>
+              {!h.owned && (
+                <div className="text-[11px] text-[var(--muted)]">locked</div>
+              )}
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && (
+          <div className="col-span-full py-8 text-center text-[13px] text-[var(--muted)]">
+            No honors.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- summary card ---------- */
 
 function SummaryCard({
@@ -2271,11 +2789,17 @@ function SummaryCard({
           <StampsSection characters={characters} />
         )}
 
+        {(activeSection === "Kizuna" || activeSection === "Honors") && (
+          <HonorsSection />
+        )}
+
         {activeSection !== "Summary" &&
           activeSection !== "Cards" &&
           activeSection !== "Music" &&
           activeSection !== "Events" &&
-          activeSection !== "Stamps" && (
+          activeSection !== "Stamps" &&
+          activeSection !== "Kizuna" &&
+          activeSection !== "Honors" && (
             <div className="py-12 text-center text-[var(--muted)]">
               {activeSection} — coming soon
             </div>

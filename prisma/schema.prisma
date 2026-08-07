@@ -117,6 +117,7 @@ model Honor {
   assetbundleName String
   honorRarity     String
   userHonors      UserHonor[]
+  groupId         Int?    
 }
 
 model UserHonor {
@@ -180,4 +181,10 @@ model MusicTag {
   musicTag String
   seq      Int
   @@unique([musicId, musicTag])
+}
+
+model HonorGroup {
+  id        Int     @id
+  name      String?
+  honorType String?
 }
