@@ -9,6 +9,73 @@ function rarityForRank(rank: number): "low" | "middle" | "high" | "highest" {
   return "low";
 }
 
+// fan-honor tiers in band order, with each tier's level cap (mirrors the
+// BANDS ladder in app/honor.ts). A character's 4 "X Fan" UserHonor rows are
+// cumulative — own low fully, then middle fully, etc., up to wherever their
+// rank currently lands — so the admin editor collapses them into one
+// combined 1-32 level instead of 4 near-identical rows.
+const FAN_HONOR_BANDS: { rarity: string; maxLevel: number }[] = [
+  { rarity: "low", maxLevel: 5 },
+  { rarity: "middle", maxLevel: 10 },
+  { rarity: "high", maxLevel: 10 },
+  { rarity: "highest", maxLevel: 7 },
+];
+const FAN_HONOR_MAX_LEVEL = FAN_HONOR_BANDS.reduce(
+  (sum, b) => sum + b.maxLevel,
+  0,
+);
+
+// event ranking-ladder honors ("1st", "Top 1,000", ...) mirror the parsing
+// in app/profile/images.ts (eventFrameTier/eventRankImageUrl) — same
+// ordinal/"Top N" patterns, just extracting the raw threshold number here.
+function eventHonorRankThreshold(name: string): number | null {
+  const ord = name.match(/^(\d+)(?:st|nd|rd|th)/i);
+  if (ord) return parseInt(ord[1], 10);
+  const top = name.match(/top\s*([\d,]+)/i);
+  if (top) return parseInt(top[1].replace(/,/g, ""), 10);
+  return null;
+}
+function normalizeEventName(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+// find the ONE honor group representing an event's overall ranking ladder —
+// excludes World Link "Chapter N" groups, since UserEvent only tracks a
+// single rank per event (not per-chapter), so those stay manually editable.
+function findOverallEventHonorGroup(
+  eventName: string,
+  groups: { id: number; name: string | null; honorType: string | null }[],
+) {
+  const key = normalizeEventName(eventName);
+  return groups.find(
+    (g) =>
+      g.honorType === "event" &&
+      normalizeEventName(g.name) === key &&
+      !/chapter/i.test(g.name ?? ""),
+  );
+}
+// upsert/clear a rank-tier honor group's UserHonor rows to match a rank
+// (or clear all of them if rank is null). Shared by setEventEdit and the
+// one-time backfill for events that already had a rank recorded.
+async function syncEventHonorsForRank(groupId: number, rank: number | null) {
+  const honors = await prisma.honor.findMany({ where: { groupId } });
+  await Promise.all(
+    honors.map(async (h) => {
+      const threshold = eventHonorRankThreshold(h.name);
+      if (threshold == null) return; // Memorial etc — not rank-derived
+      const achieved = rank != null && threshold >= rank;
+      if (achieved) {
+        await prisma.userHonor.upsert({
+          where: { honorId: h.id },
+          update: { level: 1 },
+          create: { honorId: h.id, level: 1 },
+        });
+      } else {
+        await prisma.userHonor.deleteMany({ where: { honorId: h.id } });
+      }
+    }),
+  );
+}
+
 const { handleRequest } = createYoga({
   schema: createSchema({
     typeDefs: `
@@ -77,6 +144,7 @@ const { handleRequest } = createYoga({
         assetbundleName: String!
         tags: [String!]!
         results: [MusicDifficultyResult!]!
+        favorite: Boolean!
       }
       type EventItem {
         id: Int!
@@ -117,6 +185,11 @@ const { handleRequest } = createYoga({
         level: Int
         owned: Boolean!
       }
+      type FavoriteSong {
+        musicId: Int!
+        title: String!
+        assetbundleName: String!
+      }
       type SekaiSummary {
         rank: Int
         updatedAt: String
@@ -124,6 +197,7 @@ const { handleRequest } = createYoga({
         eventCount: Int
         difficulties: [DifficultyStat]
         characters: [CharacterSummary]
+        favoriteSongs: [FavoriteSong!]!
       }
       type Query {
         profile: Profile
@@ -135,6 +209,59 @@ const { handleRequest } = createYoga({
         stampList: [StampItem!]!
         honorList: [HonorItem!]!
         bondHonorList: [BondHonorItem!]!
+        adminCharacters: [AdminCharacter!]!
+        adminHonors: [AdminHonor!]!
+        adminFanHonors: [FanHonorStatus!]!
+        adminStats: AdminStats!
+      }
+      type AdminStats {
+        characterCount: Int!
+        cardCount: Int!
+        songFavoriteCount: Int!
+        eventCount: Int!
+        stampCount: Int!
+        honorCount: Int!
+      }
+      type AdminCharacter {
+        characterId: Int!
+        name: String!
+        unit: String!
+        characterRank: Int!
+        favoriteTier: Int
+      }
+      type AdminSong {
+        musicId: Int!
+        title: String!
+        assetbundleName: String!
+        favorite: Boolean!
+      }
+      type AdminHonor {
+        id: Int!
+        name: String!
+        assetbundleName: String!
+        honorRarity: String
+        groupName: String
+        owned: Boolean!
+        level: Int
+      }
+      type FanHonorStatus {
+        characterId: Int!
+        name: String!
+        level: Int!
+        maxLevel: Int!
+        rarity: String
+        tierLevel: Int
+        tierMaxLevel: Int
+      }
+      type Mutation {
+        setCharacterEdit(characterId: Int!, favoriteTier: Int, characterRank: Int): AdminCharacter!
+        setSongFavorite(musicId: Int!, favorite: Boolean!): AdminSong!
+        setCardEdit(cardId: Int!, owned: Boolean!, level: Int, masterRank: Int, skillLevel: Int, specialTraining: Boolean): CharacterCard!
+        setMusicResult(musicId: Int!, difficulty: String!, playResult: String): MusicDifficultyResult!
+        setEventEdit(eventId: Int!, rank: Int): EventItem!
+        setStampEdit(stampId: Int!, owned: Boolean!): StampItem!
+        setHonorEdit(honorId: Int!, owned: Boolean!, level: Int): AdminHonor!
+        setFanHonorLevel(characterId: Int!, level: Int!): FanHonorStatus!
       }
     `,
     resolvers: {
@@ -154,6 +281,7 @@ const { handleRequest } = createYoga({
             userChars,
             stages,
             allFanHonors,
+            favoriteSongRows,
           ] = await Promise.all([
             prisma.profile.findFirst(),
             prisma.userCard.count(),
@@ -170,7 +298,14 @@ const { handleRequest } = createYoga({
             prisma.honor.findMany({
               where: { name: { endsWith: "Fan" } },
             }),
+            prisma.userMusicFavorite.findMany({ include: { music: true } }),
           ]);
+
+          const favoriteSongs = favoriteSongRows.map((f) => ({
+            musicId: f.musicId,
+            title: f.music.title,
+            assetbundleName: f.music.assetbundleName,
+          }));
 
           // per-difficulty counts — CUMULATIVE up the ladder, like the game:
           //   clears      = CLEAR or better (CLEAR + FULL_COMBO + FULL_PERFECT)
@@ -242,6 +377,7 @@ const { handleRequest } = createYoga({
             eventCount,
             difficulties,
             characters,
+            favoriteSongs,
           };
         },
 
@@ -284,12 +420,14 @@ const { handleRequest } = createYoga({
           const g = globalThis as { __musicListCache?: unknown };
           if (g.__musicListCache) return g.__musicListCache;
 
-          const [songs, results, difficulties, tags] = await Promise.all([
+          const [songs, results, difficulties, tags, favorites] = await Promise.all([
             prisma.music.findMany({ orderBy: { id: "asc" } }),
             prisma.userMusicResult.findMany(),
             prisma.musicDifficulty.findMany(),
             prisma.musicTag.findMany(),
+            prisma.userMusicFavorite.findMany(),
           ]);
+          const favoriteSet = new Set(favorites.map((f) => f.musicId));
 
           // level per (musicId, difficulty) from MusicDifficulty
           const levelByKey = new Map<string, number>();
@@ -329,6 +467,7 @@ const { handleRequest } = createYoga({
                 playResult: resultByKey.get(`${s.id}:${diff}`) ?? null,
                 playLevel: levelByKey.get(`${s.id}:${diff}`) ?? null,
               })),
+              favorite: favoriteSet.has(s.id),
             };
           });
 
@@ -482,6 +621,144 @@ const { handleRequest } = createYoga({
           return out;
         },
 
+        adminCharacters: async () => {
+          const rows = await prisma.userCharacter.findMany({
+            include: { character: true },
+            orderBy: { characterId: "asc" },
+          });
+          return rows.map((uc) => ({
+            characterId: uc.characterId,
+            name:
+              uc.character.givenName +
+              (uc.character.firstName ? " " + uc.character.firstName : ""),
+            unit: uc.character.unit,
+            characterRank: uc.characterRank,
+            favoriteTier: uc.favoriteTier ?? null,
+          }));
+        },
+
+        adminHonors: async () => {
+          // flat, uncollapsed list (unlike honorList, which merges the
+          // ranking-tier ladder into one display row) — admin edits raw rows.
+          const [honors, userHonors, groups, events] = await Promise.all([
+            prisma.honor.findMany({ orderBy: { id: "asc" } }),
+            prisma.userHonor.findMany(),
+            prisma.honorGroup.findMany(),
+            prisma.event.findMany(),
+          ]);
+          const levelByHonor = new Map(
+            userHonors.map((u) => [u.honorId, u.level]),
+          );
+          const nameByGroup = new Map(groups.map((g) => [g.id, g.name]));
+          const typeByGroup = new Map(groups.map((g) => [g.id, g.honorType]));
+          // "overall" ranking-ladder groups (1st/Top N/...) that now sync
+          // automatically from the Events tab's recorded rank
+          const derivedGroupIds = new Set(
+            events
+              .map((e) => findOverallEventHonorGroup(e.name, groups)?.id)
+              .filter((id): id is number => id != null),
+          );
+          return honors
+            .filter((h) => {
+              const type = h.groupId != null ? typeByGroup.get(h.groupId) : null;
+              if (type === "rank_match") return false;
+              // fan honors (4 near-identical rows per character) are
+              // consolidated into adminFanHonors instead
+              if (h.name.endsWith("Fan")) return false;
+              // ranking-ladder honors ("1st"/"Top N"/...) for an event
+              // whose overall group we can derive from — non-ladder honors
+              // in the same group (e.g. Memorial) stay manually editable
+              if (
+                h.groupId != null &&
+                derivedGroupIds.has(h.groupId) &&
+                eventHonorRankThreshold(h.name) != null
+              ) {
+                return false;
+              }
+              return true;
+            })
+            .map((h) => ({
+              id: h.id,
+              name: h.name,
+              assetbundleName: h.assetbundleName,
+              honorRarity: h.honorRarity ?? null,
+              groupName:
+                h.groupId != null ? (nameByGroup.get(h.groupId) ?? null) : null,
+              owned: levelByHonor.has(h.id),
+              level: levelByHonor.get(h.id) ?? null,
+            }));
+        },
+
+        adminFanHonors: async () => {
+          const [chars, fanHonors, userHonors] = await Promise.all([
+            prisma.character.findMany({ orderBy: { id: "asc" } }),
+            prisma.honor.findMany({ where: { name: { endsWith: "Fan" } } }),
+            prisma.userHonor.findMany(),
+          ]);
+          const levelByHonorId = new Map(userHonors.map((u) => [u.honorId, u.level]));
+          const honorsByChar = new Map<number, typeof fanHonors>();
+          for (const h of fanHonors) {
+            if (h.groupId == null) continue;
+            if (!honorsByChar.has(h.groupId)) honorsByChar.set(h.groupId, []);
+            honorsByChar.get(h.groupId)!.push(h);
+          }
+
+          return chars.map((c) => {
+            const byRarity = new Map(
+              (honorsByChar.get(c.id) ?? []).map((h) => [h.honorRarity, h]),
+            );
+            let overall = 0;
+            let rarity: string | null = null;
+            let tierLevel = 0;
+            let tierMaxLevel = 0;
+            for (const band of FAN_HONOR_BANDS) {
+              const honor = byRarity.get(band.rarity);
+              const lvl = honor ? (levelByHonorId.get(honor.id) ?? 0) : 0;
+              if (lvl <= 0) break;
+              overall += lvl;
+              rarity = band.rarity;
+              tierLevel = lvl;
+              tierMaxLevel = band.maxLevel;
+              if (lvl < band.maxLevel) break; // partway into this tier, stop
+            }
+            return {
+              characterId: c.id,
+              name: c.givenName + (c.firstName ? " " + c.firstName : ""),
+              level: overall,
+              maxLevel: FAN_HONOR_MAX_LEVEL,
+              rarity,
+              tierLevel: rarity ? tierLevel : null,
+              tierMaxLevel: rarity ? tierMaxLevel : null,
+            };
+          });
+        },
+
+        adminStats: async () => {
+          const [
+            characterCount,
+            cardCount,
+            songFavoriteCount,
+            eventCount,
+            stampCount,
+            honorCount,
+          ] = await Promise.all([
+            prisma.userCharacter.count(),
+            prisma.userCard.count(),
+            prisma.userMusicFavorite.count(),
+            prisma.userEvent.count({ where: { rank: { not: null } } }),
+            prisma.userStamp.count(),
+            prisma.userHonor.count(),
+          ]);
+          return {
+            characterCount,
+            cardCount,
+            songFavoriteCount,
+            eventCount,
+            stampCount,
+            honorCount,
+          };
+        },
+
         bondHonorList: async () => {
           const [bonds, userBonds] = await Promise.all([
             prisma.bondHonor.findMany({ orderBy: { id: "asc" } }),
@@ -500,6 +777,299 @@ const { handleRequest } = createYoga({
             level: levelByBond.get(b.id) ?? null,
             owned: levelByBond.has(b.id),
           }));
+        },
+      },
+
+      Mutation: {
+        setCharacterEdit: async (
+          _: unknown,
+          {
+            characterId,
+            favoriteTier,
+            characterRank,
+          }: {
+            characterId: number;
+            favoriteTier?: number | null;
+            characterRank?: number | null;
+          },
+        ) => {
+          const uc = await prisma.userCharacter.upsert({
+            where: { characterId },
+            update: {
+              ...(characterRank != null ? { characterRank } : {}),
+              ...(favoriteTier !== undefined ? { favoriteTier } : {}),
+            },
+            create: {
+              characterId,
+              characterRank: characterRank ?? 1,
+              favoriteTier: favoriteTier ?? null,
+            },
+            include: { character: true },
+          });
+          return {
+            characterId: uc.characterId,
+            name:
+              uc.character.givenName +
+              (uc.character.firstName ? " " + uc.character.firstName : ""),
+            unit: uc.character.unit,
+            characterRank: uc.characterRank,
+            favoriteTier: uc.favoriteTier ?? null,
+          };
+        },
+
+        setSongFavorite: async (
+          _: unknown,
+          { musicId, favorite }: { musicId: number; favorite: boolean },
+        ) => {
+          if (favorite) {
+            await prisma.userMusicFavorite.upsert({
+              where: { musicId },
+              update: {},
+              create: { musicId },
+            });
+          } else {
+            await prisma.userMusicFavorite.deleteMany({ where: { musicId } });
+          }
+          // musicList caches results globally — bust it so the edit shows up
+          (globalThis as { __musicListCache?: unknown }).__musicListCache =
+            undefined;
+          const music = await prisma.music.findUniqueOrThrow({
+            where: { id: musicId },
+          });
+          return {
+            musicId,
+            title: music.title,
+            assetbundleName: music.assetbundleName,
+            favorite,
+          };
+        },
+
+        setCardEdit: async (
+          _: unknown,
+          {
+            cardId,
+            owned,
+            level,
+            masterRank,
+            skillLevel,
+            specialTraining,
+          }: {
+            cardId: number;
+            owned: boolean;
+            level?: number | null;
+            masterRank?: number | null;
+            skillLevel?: number | null;
+            specialTraining?: boolean | null;
+          },
+        ) => {
+          if (owned) {
+            await prisma.userCard.upsert({
+              where: { cardId },
+              update: {
+                ...(level != null ? { level } : {}),
+                ...(masterRank != null ? { masterRank } : {}),
+                ...(skillLevel != null ? { skillLevel } : {}),
+                ...(specialTraining != null ? { specialTraining } : {}),
+              },
+              create: {
+                cardId,
+                level: level ?? 1,
+                masterRank: masterRank ?? 0,
+                skillLevel: skillLevel ?? 1,
+                specialTraining: specialTraining ?? false,
+              },
+            });
+          } else {
+            await prisma.userCard.deleteMany({ where: { cardId } });
+          }
+          const [card, uc] = await Promise.all([
+            prisma.card.findUniqueOrThrow({ where: { id: cardId } }),
+            prisma.userCard.findUnique({ where: { cardId } }),
+          ]);
+          return {
+            cardId: card.id,
+            name: card.name,
+            rarity: card.rarity,
+            assetbundleName: card.assetbundleName,
+            owned: Boolean(uc),
+            level: uc?.level ?? null,
+            masterRank: uc?.masterRank ?? null,
+            skillLevel: uc?.skillLevel ?? null,
+            specialTraining: uc?.specialTraining ?? null,
+          };
+        },
+
+        setMusicResult: async (
+          _: unknown,
+          {
+            musicId,
+            difficulty,
+            playResult,
+          }: { musicId: number; difficulty: string; playResult?: string | null },
+        ) => {
+          if (playResult) {
+            await prisma.userMusicResult.upsert({
+              where: { musicId_difficulty: { musicId, difficulty } },
+              update: { playResult },
+              create: { musicId, difficulty, playResult },
+            });
+          } else {
+            await prisma.userMusicResult.deleteMany({
+              where: { musicId, difficulty },
+            });
+          }
+          // musicList caches results globally — bust it so the edit shows up
+          (globalThis as { __musicListCache?: unknown }).__musicListCache =
+            undefined;
+          const diffRow = await prisma.musicDifficulty.findFirst({
+            where: { musicId, musicDifficulty: difficulty },
+          });
+          return {
+            difficulty,
+            playResult: playResult ?? null,
+            playLevel: diffRow?.playLevel ?? null,
+          };
+        },
+
+        setEventEdit: async (
+          _: unknown,
+          { eventId, rank }: { eventId: number; rank?: number | null },
+        ) => {
+          await prisma.userEvent.upsert({
+            where: { eventId },
+            update: { rank: rank ?? null },
+            create: { eventId, rank: rank ?? null },
+          });
+          const event = await prisma.event.findUniqueOrThrow({
+            where: { id: eventId },
+          });
+
+          // sync this event's ranking-ladder honors (1st/Top N/...) to
+          // match the recorded rank — they're derived, not manually toggled
+          const groups = await prisma.honorGroup.findMany({
+            where: { honorType: "event" },
+          });
+          const group = findOverallEventHonorGroup(event.name, groups);
+          if (group) {
+            await syncEventHonorsForRank(group.id, rank ?? null);
+          }
+
+          return {
+            id: event.id,
+            name: event.name,
+            assetbundleName: event.assetbundleName,
+            eventType: event.eventType,
+            startAt: event.startAt ? String(event.startAt.getTime()) : null,
+            unit: event.unit ?? null,
+            rank: rank ?? null,
+          };
+        },
+
+        setStampEdit: async (
+          _: unknown,
+          { stampId, owned }: { stampId: number; owned: boolean },
+        ) => {
+          if (owned) {
+            await prisma.userStamp.upsert({
+              where: { stampId },
+              update: {},
+              create: { stampId },
+            });
+          } else {
+            await prisma.userStamp.deleteMany({ where: { stampId } });
+          }
+          const stamp = await prisma.stamp.findUniqueOrThrow({
+            where: { id: stampId },
+          });
+          return {
+            id: stamp.id,
+            name: stamp.name,
+            assetbundleName: stamp.assetbundleName,
+            characterId: stamp.characterId ?? null,
+            isDuo: stamp.gameCharacterUnitId == null,
+            owned,
+          };
+        },
+
+        setHonorEdit: async (
+          _: unknown,
+          {
+            honorId,
+            owned,
+            level,
+          }: { honorId: number; owned: boolean; level?: number | null },
+        ) => {
+          if (owned) {
+            await prisma.userHonor.upsert({
+              where: { honorId },
+              update: { ...(level != null ? { level } : {}) },
+              create: { honorId, level: level ?? 1 },
+            });
+          } else {
+            await prisma.userHonor.deleteMany({ where: { honorId } });
+          }
+          const [honor, uh] = await Promise.all([
+            prisma.honor.findUniqueOrThrow({ where: { id: honorId } }),
+            prisma.userHonor.findUnique({ where: { honorId } }),
+          ]);
+          return {
+            id: honor.id,
+            name: honor.name,
+            assetbundleName: honor.assetbundleName,
+            honorRarity: honor.honorRarity ?? null,
+            groupName: null,
+            owned: Boolean(uh),
+            level: uh?.level ?? null,
+          };
+        },
+
+        setFanHonorLevel: async (
+          _: unknown,
+          { characterId, level }: { characterId: number; level: number },
+        ) => {
+          const [character, fanHonors] = await Promise.all([
+            prisma.character.findUniqueOrThrow({ where: { id: characterId } }),
+            prisma.honor.findMany({
+              where: { groupId: characterId, name: { endsWith: "Fan" } },
+            }),
+          ]);
+          const byRarity = new Map(fanHonors.map((h) => [h.honorRarity, h]));
+
+          let remaining = Math.max(0, Math.min(level, FAN_HONOR_MAX_LEVEL));
+          let rarity: string | null = null;
+          let tierLevel = 0;
+          let tierMaxLevel = 0;
+          for (const band of FAN_HONOR_BANDS) {
+            const honor = byRarity.get(band.rarity);
+            if (!honor) continue;
+            if (remaining <= 0) {
+              await prisma.userHonor.deleteMany({ where: { honorId: honor.id } });
+              continue;
+            }
+            const bandLevel = Math.min(remaining, band.maxLevel);
+            await prisma.userHonor.upsert({
+              where: { honorId: honor.id },
+              update: { level: bandLevel },
+              create: { honorId: honor.id, level: bandLevel },
+            });
+            rarity = band.rarity;
+            tierLevel = bandLevel;
+            tierMaxLevel = band.maxLevel;
+            remaining -= band.maxLevel;
+          }
+
+          const overall = Math.max(0, Math.min(level, FAN_HONOR_MAX_LEVEL));
+          return {
+            characterId: character.id,
+            name:
+              character.givenName +
+              (character.firstName ? " " + character.firstName : ""),
+            level: overall,
+            maxLevel: FAN_HONOR_MAX_LEVEL,
+            rarity,
+            tierLevel: rarity ? tierLevel : null,
+            tierMaxLevel: rarity ? tierMaxLevel : null,
+          };
         },
       },
     },

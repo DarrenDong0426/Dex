@@ -1,8 +1,10 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { games, themes, type Game, type Mode } from "@/app/games";
 import BackgroundFX from "@/app/BackgroundFX";
+import ThemeToggle from "@/app/ThemeToggle";
 import StampsSection from "@/app/profile/StampsSection";
 import {
   fanHonorForRank,
@@ -32,6 +34,12 @@ type CharacterSummary = {
   honorAsset?: string | null;
 };
 
+type FavoriteSong = {
+  musicId: number;
+  title: string;
+  assetbundleName: string;
+};
+
 type Summary = {
   rank: number | null;
   updatedAt: string | null;
@@ -39,6 +47,7 @@ type Summary = {
   eventCount: number;
   difficulties: Difficulty[];
   characters: CharacterSummary[];
+  favoriteSongs: FavoriteSong[];
 } | null;
 
 const TIER_LABELS: Record<number, string> = {
@@ -124,6 +133,8 @@ export default function ProfileClient({
     active.slug === "sekai" && summary ? summary.characters : [];
   const difficulties =
     active.slug === "sekai" && summary ? summary.difficulties : [];
+  const favoriteSongs =
+    active.slug === "sekai" && summary ? summary.favoriteSongs : [];
 
   return (
     <div
@@ -148,6 +159,7 @@ export default function ProfileClient({
             lastUpdated={lastUpdated}
             characters={characters}
             difficulties={difficulties}
+            favoriteSongs={favoriteSongs}
           />
         </div>
       </div>
@@ -155,30 +167,6 @@ export default function ProfileClient({
   );
 }
 
-/* ---------- sun/moon sliding toggle (knob sized to fit) ---------- */
-
-function ThemeToggle({ mode, onToggle }: { mode: Mode; onToggle: () => void }) {
-  const dark = mode === "dark";
-  // track h-6 (24px); knob h-5 (20px) with top/left 2px → fits with 2px inset
-  return (
-    <button
-      onClick={onToggle}
-      aria-label="toggle theme"
-      className="relative h-6 w-12 rounded-full border border-[var(--line)] bg-[var(--panel-2)]"
-    >
-      <span className="absolute left-1 top-1/2 -translate-y-1/2 text-[10px] leading-none">
-        ☀
-      </span>
-      <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[10px] leading-none">
-        🌙
-      </span>
-      <span
-        className="absolute left-0.5 top-0.5 h-[18px] w-[18px] rounded-full bg-[var(--accent)] shadow transition-transform duration-300"
-        style={{ transform: dark ? "translateX(24px)" : "translateX(0px)" }}
-      />
-    </button>
-  );
-}
 
 /* ---------- full-height sidebar ---------- */
 
@@ -193,13 +181,32 @@ function Sidebar({
   mode: Mode;
   onToggleMode: () => void;
 }) {
+  const router = useRouter();
+  const pfpClicks = useRef(0);
+  const pfpClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 3 clicks in a row (within a short window each) → jump to the admin panel
+  function handlePfpClick() {
+    pfpClicks.current += 1;
+    if (pfpClickTimer.current) clearTimeout(pfpClickTimer.current);
+    if (pfpClicks.current >= 3) {
+      pfpClicks.current = 0;
+      router.push("/admin");
+      return;
+    }
+    pfpClickTimer.current = setTimeout(() => {
+      pfpClicks.current = 0;
+    }, 600);
+  }
+
   return (
     <div className="sticky top-0 z-20 flex h-screen w-[84px] flex-shrink-0 flex-col items-center gap-3 border-r border-[var(--line)] bg-[var(--panel)] py-5 transition-colors duration-500">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src="/pfp.png"
         alt="ITAMI"
-        className="mb-2 h-12 w-12 rounded-2xl object-cover"
+        onClick={handlePfpClick}
+        className="mb-2 h-12 w-12 cursor-pointer rounded-2xl object-cover"
       />
       <div className="mb-2 h-px w-9 bg-[var(--line)]" />
 
@@ -665,31 +672,112 @@ export function jacketUrl(assetbundleName: string): string {
   return `https://storage.sekai.best/sekai-en-assets/music/jacket/${assetbundleName}/${assetbundleName}.webp`;
 }
 
-// No "favorite song" field in the data yet, so these are hand-picked by
-// assetbundleName. Fill in each song's real abn (from the Music table).
-const TOP_SONGS: { title: string; abn: string }[] = [
-  { title: "Bad Apple!!", abn: "jacket_s_501" },
-  { title: "Gunjou Sanka", abn: "jacket_s_141" },
-  { title: "Neo", abn: "jacket_s_366" },
-];
-
-function TopSongs() {
-  return (
-    <div className="grid grid-cols-3 gap-3">
-      {TOP_SONGS.map((s) => (
-        <div key={s.title} className="flex flex-col gap-1.5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={s.abn ? jacketUrl(s.abn) : ""}
-            alt={s.title}
-            className="aspect-square w-full rounded-xl bg-[var(--panel-2)] object-cover shadow-md"
-            loading="lazy"
-          />
-          <div className="truncate text-center text-[12px] font-bold text-[var(--text)]">
-            {s.title}
+function TopSongs({ songs }: { songs: FavoriteSong[] }) {
+  if (songs.length <= 3) {
+    return (
+      <div className="grid grid-cols-3 gap-3">
+        {songs.map((s) => (
+          <div key={s.musicId} className="flex flex-col gap-1.5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={jacketUrl(s.assetbundleName)}
+              alt={s.title}
+              className="aspect-square w-full rounded-xl bg-[var(--panel-2)] object-cover shadow-md"
+              loading="lazy"
+            />
+            <div className="truncate text-center text-[12px] font-bold text-[var(--text)]">
+              {s.title}
+            </div>
           </div>
+        ))}
+      </div>
+    );
+  }
+  return <TopSongsStack songs={songs} />;
+}
+
+// 4+ favorites: an overlapping "album stack" the mouse scrubs across
+// left-to-right instead of a plain grid.
+function TopSongsStack({ songs }: { songs: FavoriteSong[] }) {
+  const outerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const [t, setT] = useState(0); // 0..1 scrub position
+  const [hovering, setHovering] = useState(false);
+
+  useEffect(() => {
+    const measure = () => setContainerWidth(outerRef.current?.clientWidth ?? 0);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  const CARD = 84;
+  const OVERLAP = 42;
+  const n = songs.length;
+  const trackWidth = CARD + OVERLAP * (n - 1);
+  const maxShift = Math.max(0, trackWidth - containerWidth);
+  const activeIndex = Math.min(n - 1, Math.round(t * (n - 1)));
+
+  function handleMove(e: React.MouseEvent) {
+    const rect = outerRef.current?.getBoundingClientRect();
+    if (!rect || !rect.width) return;
+    setT(Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)));
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div
+        ref={outerRef}
+        onMouseMove={handleMove}
+        onMouseEnter={() => setHovering(true)}
+        onMouseLeave={() => {
+          setHovering(false);
+          setT(0);
+        }}
+        className="relative flex h-32 w-full items-center overflow-hidden"
+        style={{ cursor: "ew-resize" }}
+      >
+        <div
+          className="relative flex-shrink-0 transition-transform duration-200 ease-out"
+          style={{
+            width: trackWidth,
+            height: CARD,
+            transform: `translateX(${-t * maxShift}px)`,
+          }}
+        >
+          {songs.map((s, i) => {
+            const active = hovering && i === activeIndex;
+            return (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={s.musicId}
+                src={jacketUrl(s.assetbundleName)}
+                alt={s.title}
+                loading="lazy"
+                className="absolute top-0 rounded-xl border-2 object-cover transition-all duration-200 ease-out"
+                style={{
+                  left: i * OVERLAP,
+                  width: CARD,
+                  height: CARD,
+                  borderColor: active ? "var(--accent)" : "var(--panel)",
+                  zIndex: active ? n + 1 : i,
+                  transform: `rotate(${active ? 0 : i % 2 === 0 ? -4 : 4}deg) translateY(${
+                    active ? -10 : 0
+                  }px) scale(${active ? 1.15 : 1})`,
+                  boxShadow: active
+                    ? "0 10px 24px -8px var(--accent)"
+                    : "0 6px 16px -8px rgba(0,0,0,0.5)",
+                }}
+              />
+            );
+          })}
         </div>
-      ))}
+      </div>
+      <div className="h-4 truncate text-center text-[12px] font-bold text-[var(--text)]">
+        {hovering
+          ? songs[activeIndex]?.title
+          : `${n} favorite songs — hover to browse`}
+      </div>
     </div>
   );
 }
@@ -2478,11 +2566,13 @@ function SummaryCard({
   lastUpdated,
   characters,
   difficulties,
+  favoriteSongs,
 }: {
   game: Game;
   lastUpdated: string | null;
   characters: CharacterSummary[];
   difficulties: Difficulty[];
+  favoriteSongs: FavoriteSong[];
 }) {
   const hasData = characters.length > 0;
   const [activeSection, setActiveSection] = useState("Summary");
@@ -2630,7 +2720,7 @@ function SummaryCard({
                       <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wider text-[var(--muted)]">
                         Top Songs
                       </h2>
-                      <TopSongs />
+                      <TopSongs songs={favoriteSongs} />
                     </div>
                   </div>
                   <div className="min-w-0 lg:w-1/2">
@@ -2684,3 +2774,4 @@ function SummaryCard({
     </div>
   );
 }
+

@@ -35,7 +35,7 @@ model Card {
 
 model UserCard {
   id              Int     @id @default(autoincrement())
-  cardId          Int
+  cardId          Int     @unique
   card            Card    @relation(fields: [cardId], references: [id])
   level           Int
   masterRank      Int
@@ -54,10 +54,11 @@ model Character {
 }
 
 model Music {
-  id              Int               @id
+  id              Int                 @id
   title           String
   assetbundleName String
   results         UserMusicResult[]
+  favorites       UserMusicFavorite[]
 }
 
 model UserMusicResult {
@@ -70,12 +71,18 @@ model UserMusicResult {
   @@unique([musicId, difficulty])
 }
 
+model UserMusicFavorite {
+  id      Int   @id @default(autoincrement())
+  musicId Int   @unique
+  music   Music @relation(fields: [musicId], references: [id])
+}
+
 model UserCharacter {
   id            Int       @id @default(autoincrement())
-  characterId   Int
+  characterId   Int       @unique
   character     Character @relation(fields: [characterId], references: [id])
   characterRank Int
-  favoriteTier Int?  
+  favoriteTier Int?
 }
 
 model Stamp {
@@ -89,7 +96,7 @@ model Stamp {
 
 model UserStamp {
   id      Int   @id @default(autoincrement())
-  stampId Int
+  stampId Int   @unique
   stamp   Stamp @relation(fields: [stampId], references: [id])
 }
 
@@ -106,7 +113,7 @@ model Event {
 
 model UserEvent {
   id      Int   @id @default(autoincrement())
-  eventId Int
+  eventId Int   @unique
   event   Event @relation(fields: [eventId], references: [id])
   rank    Int?
 }
@@ -122,7 +129,7 @@ model Honor {
 
 model UserHonor {
   id      Int   @id @default(autoincrement())
-  honorId Int
+  honorId Int   @unique
   honot   Honor @relation(fields: [honorId], references: [id])
   level   Int
 }
@@ -187,4 +194,19 @@ model HonorGroup {
   id        Int     @id
   name      String?
   honorType String?
+}
+
+model AdminOtp {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  codeHash  String  
+  expiresAt DateTime 
+  attempts  Int      @default(0) 
+  createdAt DateTime @default(now())
+}
+
+model AdminSession {
+  id        String   @id @default(cuid()) 
+  expiresAt DateTime 
+  createdAt DateTime @default(now())
 }
