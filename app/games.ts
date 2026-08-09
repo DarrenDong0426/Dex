@@ -2,10 +2,15 @@
 
 export type Stat = { value: string; label: string };
 
+// entries are things Darren tracks — games OR anime. The shell iterates over
+// all of them; `kind` decides which section set / page shape to render.
+export type EntryKind = "game" | "anime";
+
 export type Game = {
   slug: string;
   name: string;
   tag: string;
+  kind: EntryKind; // "game" (default) or "anime"
   logo: string; // short code until real logos are dropped in
   logoBg: string; // css background for the logo tile
   logoSrc?: string;
@@ -94,17 +99,57 @@ export const themes: Record<string, Record<Mode, ThemeVars>> = {
       "--banner-b": "#b08a2e",
     },
   },
+  // Anime isn't a game but themes the page like one. Violet/rose palette to
+  // read distinctly from Sekai (mint) and Genshin (gold).
+  anime: {
+    dark: {
+      "--bg": "#0f0b18",
+      "--panel": "#1b1530",
+      "--panel-2": "#241c40",
+      "--line": "#3a2f5c",
+      "--text": "#f2eeff",
+      "--muted": "#b0a3cc",
+      "--accent": "#b57ce0",
+      "--accent-2": "#f07ea8",
+      "--scene":
+        "radial-gradient(60% 50% at 15% 12%, #8b5ad044, transparent 55%), radial-gradient(55% 50% at 85% 20%, #f07ea82e, transparent 55%), radial-gradient(60% 50% at 55% 95%, #6e5ad02e, transparent 55%), linear-gradient(180deg,#0f0b18 0%,#0f0b18 70%)",
+      "--gbanner": "linear-gradient(120deg,#8b5ad0,#f07ea8,#6e8ae0,#b57ce0)",
+      "--banner-bg": "linear-gradient(135deg,#241c40,#16122a)",
+      "--banner-text": "#f6f4ff",
+      "--banner-sub": "#b0a3cc",
+      "--banner-b": "#e0d6f5",
+    },
+    light: {
+      "--bg": "#faf4fd",
+      "--panel": "#ffffff",
+      "--panel-2": "#f5eafb",
+      "--line": "#e6d3f3",
+      "--text": "#33283a",
+      "--muted": "#9a89a8",
+      "--accent": "#a35ad0",
+      "--accent-2": "#e87ea8",
+      "--scene":
+        "radial-gradient(60% 50% at 15% 12%, #e6d0ffcc, transparent 55%), radial-gradient(55% 50% at 85% 18%, #ffd0e4bb, transparent 55%), radial-gradient(60% 50% at 55% 96%, #d8d4ffaa, transparent 55%), linear-gradient(180deg,#fdf7ff 0%,#faf4fd 70%)",
+      "--gbanner": "linear-gradient(120deg,#c9a0e6,#ffcfe0,#b8c0f0,#d9b3f0)",
+      "--banner-bg": "linear-gradient(135deg,#fff,#f6eefb)",
+      "--banner-text": "#33283a",
+      "--banner-sub": "#9a89a8",
+      "--banner-b": "#9a5ac0",
+    },
+  },
 };
 
 const SEKAI_RAINBOW =
   "conic-gradient(from 90deg,#4ab7a0,#f0819e,#3a8ee0,#f0a04a,#9b6ee0,#4ab7a0)";
 const GENSHIN_GOLD = "linear-gradient(135deg,#1e3a6e,#d4af37)";
+const ANIME_VIOLET = "linear-gradient(135deg,#8b5ad0,#f07ea8)";
 
 export const games: Game[] = [
   {
     slug: "sekai",
     name: "Project Sekai",
     tag: "COLORFUL STAGE! · RHYTHM",
+    kind: "game",
     logo: "PS",
     logoBg: SEKAI_RAINBOW,
     logoSrc: "/logos/sekai.png",
@@ -120,7 +165,7 @@ export const games: Game[] = [
       { value: "141", label: "events" },
       { value: "1032", label: "full combos" },
     ],
-    sections: ["Cards", "Music", "Events", "Stamps", "Honors", "Projects"],
+    sections: ["Cards", "Music", "Events", "Stamps", "Honors", "Creations"],
     favorites: [
       { name: "Kanade", rank: "Rank 62", badge: "Nightcord" },
       { name: "Mafuyu", rank: "Rank 58", badge: "Nightcord" },
@@ -131,6 +176,7 @@ export const games: Game[] = [
     slug: "genshin",
     name: "Genshin Impact",
     tag: "TEYVAT · OPEN-WORLD RPG",
+    kind: "game",
     logo: "GI",
     logoBg: GENSHIN_GOLD,
     logoSrc: "/logos/genshin.png",
@@ -146,11 +192,38 @@ export const games: Game[] = [
       { value: "36", label: "abyss ★" },
       { value: "5", label: "regions" },
     ],
-    sections: ["Characters", "Weapons", "Artifacts", "Abyss", "Projects"],
+    sections: ["Characters", "Weapons", "Artifacts", "Abyss", "Creations"],
     favorites: [
       { name: "Furina", rank: "Lv90 · C2", badge: "Fontaine" },
       { name: "Neuvillette", rank: "Lv90 · C0", badge: "Fontaine" },
       { name: "Raiden", rank: "Lv90 · C2", badge: "Inazuma" },
     ],
+  },
+  {
+    slug: "anime",
+    name: "Anime",
+    tag: "WATCHLIST · TRACKER",
+    kind: "anime",
+    logo: "AN",
+    logoBg: ANIME_VIOLET,
+    logoSrc: "/logos/anime.png",
+    info: [
+      { value: "Itami", label: "username" },
+      { value: "—", label: "list" },
+      { value: "—", label: "since" },
+    ],
+    // hero + quickStats are placeholders; wired to real counts when the
+    // Anime table + resolver land (total watched / watching / favorites).
+    hero: { value: "0", label: "completed" },
+    quickStats: [
+      { value: "0", label: "watching" },
+      { value: "0", label: "completed" },
+      { value: "0", label: "dropped" },
+      { value: "0", label: "favorites" },
+    ],
+    // anime is one hub list — a single "Library" section (plus Creations for
+    // anime-themed things Darren makes). No per-title sub-pages.
+    sections: ["Library", "Creations"],
+    favorites: [],
   },
 ];
