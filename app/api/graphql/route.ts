@@ -402,28 +402,32 @@ const { handleRequest } = createYoga({
             events.map((e) => [eventKey(e.name), e.eventType]),
           );
 
-          const mapped = honors.map((h) => {
-            const gName =
-              h.groupId != null ? (nameByGroup.get(h.groupId) ?? null) : null;
-            return {
-              id: h.id,
-              name: h.name,
-              assetbundleName: h.assetbundleName,
-              honorRarity: h.honorRarity ?? null,
-              category:
-                h.groupId != null ? (typeByGroup.get(h.groupId) ?? null) : null,
-              groupId: h.groupId ?? null,
-              groupName: gName,
-              eventAbn: gName
-                ? (eventAbnByName.get(eventKey(gName)) ?? null)
-                : null,
-              eventType: gName
-                ? (eventTypeByName.get(eventKey(gName)) ?? null)
-                : null,
-              level: levelByHonor.get(h.id) ?? null,
-              owned: levelByHonor.has(h.id),
-            };
-          });
+          const mapped = honors
+            .map((h) => {
+              const gName =
+                h.groupId != null ? (nameByGroup.get(h.groupId) ?? null) : null;
+              return {
+                id: h.id,
+                name: h.name,
+                assetbundleName: h.assetbundleName,
+                honorRarity: h.honorRarity ?? null,
+                category:
+                  h.groupId != null
+                    ? (typeByGroup.get(h.groupId) ?? null)
+                    : null,
+                groupId: h.groupId ?? null,
+                groupName: gName,
+                eventAbn: gName
+                  ? (eventAbnByName.get(eventKey(gName)) ?? null)
+                  : null,
+                eventType: gName
+                  ? (eventTypeByName.get(eventKey(gName)) ?? null)
+                  : null,
+                level: levelByHonor.get(h.id) ?? null,
+                owned: levelByHonor.has(h.id),
+              };
+            })
+            .filter((h) => h.category !== "rank_match");
 
           // per-group real honor asset (honor_0XXX): some events have a real
           // themed honor whose art the memorial (and others) can borrow
