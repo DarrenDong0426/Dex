@@ -20,7 +20,7 @@ model Profile {
   name      String
   rank      Int
   createdAt DateTime
-  updatedAt DateTime @updatedAt @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 model Card {
@@ -44,12 +44,12 @@ model UserCard {
 }
 
 model Character {
-  id             Int             @id
-  firstName      String?
-  givenName      String
-  unit           String
-  cards          Card[]
-  userCharacters UserCharacter[]
+  id              Int                  @id
+  firstName       String?
+  givenName       String
+  unit            String
+  cards           Card[]
+  userCharacters  UserCharacter[]
   challengeStages UserChallengeStage[]
 }
 
@@ -82,7 +82,7 @@ model UserCharacter {
   characterId   Int       @unique
   character     Character @relation(fields: [characterId], references: [id])
   characterRank Int
-  favoriteTier Int?
+  favoriteTier  Int?
 }
 
 model Stamp {
@@ -108,7 +108,7 @@ model Event {
   eventType          String
   startAt            DateTime
   userEvents         UserEvent[]
-  unit String?
+  unit               String?
 }
 
 model UserEvent {
@@ -124,7 +124,7 @@ model Honor {
   assetbundleName String
   honorRarity     String
   userHonors      UserHonor[]
-  groupId         Int?    
+  groupId         Int?
 }
 
 model UserHonor {
@@ -176,9 +176,10 @@ model UserChallengeStage {
 model MusicDifficulty {
   id              Int    @id
   musicId         Int
-  musicDifficulty String   // uppercased to match UserMusicResult ("EASY")
+  musicDifficulty String // uppercased to match UserMusicResult ("EASY")
   playLevel       Int
   totalNoteCount  Int
+
   @@unique([musicId, musicDifficulty])
 }
 
@@ -187,6 +188,7 @@ model MusicTag {
   musicId  Int
   musicTag String
   seq      Int
+
   @@unique([musicId, musicTag])
 }
 
@@ -199,14 +201,74 @@ model HonorGroup {
 model AdminOtp {
   id        Int      @id @default(autoincrement())
   email     String   @unique
-  codeHash  String  
-  expiresAt DateTime 
-  attempts  Int      @default(0) 
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int      @default(0)
   createdAt DateTime @default(now())
 }
 
 model AdminSession {
-  id        String   @id @default(cuid()) 
-  expiresAt DateTime 
+  id        String   @id @default(cuid())
+  expiresAt DateTime
   createdAt DateTime @default(now())
+}
+
+// Genshin data is 100% synced from the HoYoLAB battle-chronicle API (no
+// master-data seed like Sekai — we only ever see characters you actually
+// own). Equipped weapon is embedded directly on the character; artifacts
+// are a separate table since a character has up to 5. Full sync replaces
+// this data each run (see app/api/genshin/sync/route.ts).
+model GenshinCharacter {
+  id                Int               @id // HoYoLAB avatar_id
+  name              String
+  element           String
+  rarity            Int
+  icon              String
+  image             String            @default("") // big splash art (HoYoLAB base.image)
+  stats             Json              @default("[]") // [{ name, value }] — HoYoLAB's own computed final stats (selected_properties)
+  level             Int
+  constellation     Int
+  friendship        Int
+  normalAttackLvl   Int
+  elementalSkillLvl Int
+  elementalBurstLvl Int
+  weaponId          Int
+  weaponName        String
+  weaponIcon        String
+  weaponRarity      Int
+  weaponLevel       Int
+  weaponRefinement  Int
+  isFavorite        Boolean           @default(false) // manual, admin-only — sync never touches this
+  costumes          Json              @default("[]") // [{ id, name, icon }] — owned skins (HoYoLAB base.costumes)
+  selectedCostumeId Int?              // manual — which costume's art to display; null = default art. Sync never touches this
+  artifacts         GenshinArtifact[]
+  updatedAt         DateTime          @default(now()) @updatedAt
+}
+
+// Full playable roster (owned + unowned), used only to render locked
+// characters on the Characters tab. Sourced from Enka Network's static
+// character/name data (raw.githubusercontent.com/EnkaNetwork/API-docs) —
+// separate from GenshinCharacter, which only ever holds what HoYoLAB sync
+// returns (i.e. characters actually owned).
+model GenshinCharacterMaster {
+  id      Int    @id // matches HoYoLAB avatar_id / GenshinCharacter.id
+  name    String
+  element String
+  rarity  Int
+  icon    String
+  region  String @default("Other") // nation/story-arc grouping (gi.yatta.moe avatar.region, normalized)
+}
+
+model GenshinArtifact {
+  id            Int              @id @default(autoincrement())
+  characterId   Int
+  character     GenshinCharacter @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  slot          String // flower / feather / sands / goblet / circlet
+  setName       String
+  icon          String
+  rarity        Int
+  level         Int
+  mainStatName  String
+  mainStatValue String
+  substats      Json // [{ name: string, value: string }]
 }

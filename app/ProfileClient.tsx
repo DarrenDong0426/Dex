@@ -6,6 +6,8 @@ import { games, themes, type Game, type Mode } from "@/app/games";
 import BackgroundFX from "@/app/BackgroundFX";
 import ThemeToggle from "@/app/ThemeToggle";
 import StampsSection from "@/app/profile/StampsSection";
+import GenshinCharactersSection from "@/app/profile/GenshinCharactersSection";
+import GenshinFavoritesSummary from "@/app/profile/GenshinFavoritesSummary";
 import {
   fanHonorForRank,
   pips,
@@ -82,6 +84,27 @@ function charaIcon(fullName: string): string {
   return `/chara/${given}.png`;
 }
 
+// deep-link support — URL hash is "#<gameSlug>-<sectionSlug>" (e.g.
+// "#genshin-characters") so a specific game+section can be bookmarked or
+// shared directly instead of always landing on the default view.
+function sectionToSlug(section: string): string {
+  return section.toLowerCase().replace(/\s+/g, "-");
+}
+
+function parseHash(): { slug: string; section: string } | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.location.hash.replace(/^#/, "");
+  if (!raw) return null;
+  const game = games.find((g) => raw === g.slug || raw.startsWith(`${g.slug}-`));
+  if (!game) return null;
+  const sectionPart = raw === game.slug ? "" : raw.slice(game.slug.length + 1);
+  const allSections = ["Summary", ...game.sections];
+  const section = sectionPart
+    ? allSections.find((s) => sectionToSlug(s) === sectionPart)
+    : undefined;
+  return { slug: game.slug, section: section ?? "Summary" };
+}
+
 export default function ProfileClient({
   profile,
   summary,
@@ -89,11 +112,42 @@ export default function ProfileClient({
   profile: ProfileData;
   summary: Summary;
 }) {
-  const [activeSlug, setActiveSlug] = useState(games[0].slug);
+  const [activeSlug, setActiveSlug] = useState(() => parseHash()?.slug ?? games[0].slug);
+  const [activeSection, setActiveSection] = useState(() => parseHash()?.section ?? "Summary");
   const [mode, setMode] = useState<Mode>("dark");
 
   const active = games.find((g) => g.slug === activeSlug) ?? games[0];
   const vars = themes[active.slug][mode] as React.CSSProperties;
+
+  // switching games (sidebar or folder tabs) always lands on that game's
+  // first tab, rather than carrying over a section name that may not exist
+  // for the new game.
+  function pickGame(slug: string) {
+    const game = games.find((g) => g.slug === slug) ?? games[0];
+    setActiveSlug(slug);
+    setActiveSection(["Summary", ...game.sections][0]);
+  }
+
+  // keep the URL hash in sync so the current game+section can be bookmarked
+  // or shared as a direct link
+  useEffect(() => {
+    const hash = `#${activeSlug}-${sectionToSlug(activeSection)}`;
+    if (window.location.hash !== hash) {
+      history.replaceState(null, "", hash);
+    }
+  }, [activeSlug, activeSection]);
+
+  // react to back/forward navigation or a hash pasted/edited by hand
+  useEffect(() => {
+    function onHashChange() {
+      const parsed = parseHash();
+      if (!parsed) return;
+      setActiveSlug(parsed.slug);
+      setActiveSection(parsed.section);
+    }
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   let display: Game = active;
   if (active.slug === "sekai" && profile && summary) {
@@ -145,7 +199,7 @@ export default function ProfileClient({
 
       <Sidebar
         activeSlug={activeSlug}
-        onPick={setActiveSlug}
+        onPick={pickGame}
         mode={mode}
         onToggleMode={() => setMode(mode === "dark" ? "light" : "dark")}
       />
@@ -153,9 +207,11 @@ export default function ProfileClient({
       <div className="relative z-10 min-w-0 flex-1">
         <div className="mx-auto max-w-[1080px] p-6">
           <ProfileBanner />
-          <FolderTabs activeSlug={activeSlug} onPick={setActiveSlug} />
+          <FolderTabs activeSlug={activeSlug} onPick={pickGame} />
           <SummaryCard
             game={display}
+            activeSection={activeSection}
+            onSectionChange={setActiveSection}
             lastUpdated={lastUpdated}
             characters={characters}
             difficulties={difficulties}
@@ -949,6 +1005,20 @@ function CardModal({
                     ? undefined
                     : "grayscale(1) brightness(0.5)",
                 }}
+                onError={(e) => {
+                  // some cards only have one art variant (e.g. certain
+                  // collab cards have no untrained state) — try the other
+                  const img = e.currentTarget;
+                  if (img.dataset.fallback !== "1") {
+                    img.dataset.fallback = "1";
+                    img.src = cardArtUrl(
+                      card.assetbundleName,
+                      !(trained && canTrain),
+                    );
+                  } else {
+                    img.style.visibility = "hidden";
+                  }
+                }}
               />
               {/* rarity stars bottom-left */}
               <div className="absolute bottom-2 left-2 text-[16px] font-bold text-yellow-300 drop-shadow">
@@ -1088,6 +1158,17 @@ function CardCell({ c, onClick }: { c: CharacterCard; onClick: () => void }) {
         className="h-full w-full object-cover object-top"
         style={{ filter: c.owned ? undefined : "grayscale(1) brightness(0.4)" }}
         loading="lazy"
+        onError={(e) => {
+          // some cards only have one art variant (e.g. certain collab cards
+          // have no untrained state) — try the other before giving up
+          const img = e.currentTarget;
+          if (img.dataset.fallback !== "1") {
+            img.dataset.fallback = "1";
+            img.src = cardArtUrl(c.assetbundleName, !c.specialTraining);
+          } else {
+            img.style.visibility = "hidden";
+          }
+        }}
       />
       {/* rarity stars */}
       <div className="absolute left-1 top-1 rounded bg-black/45 px-1 text-[9px] font-bold text-yellow-300">
@@ -1565,7 +1646,8 @@ function MusicSection() {
   }, [songs, activeTag, query, status, diffFilter]);
 
   useEffect(() => {
-    if (MUSIC_CACHE) return; // already loaded this session
+    // paint from cache instantly, but always refetch — admin edits made on
+    // another tab/page need to show up here without a hard refresh
     let cancelled = false;
     fetch("/api/graphql", {
       method: "POST",
@@ -1854,7 +1936,6 @@ function EventsSection() {
   }, [activeUnit, events]);
 
   useEffect(() => {
-    if (EVENT_CACHE) return;
     let cancelled = false;
     fetch("/api/graphql", {
       method: "POST",
@@ -2190,7 +2271,6 @@ function HonorsSection() {
   const [catFilter, setCatFilter] = useState<string>("all");
 
   useEffect(() => {
-    if (HONOR_CACHE && BOND_CACHE) return;
     let cancelled = false;
     fetch("/api/graphql", {
       method: "POST",
@@ -2563,19 +2643,22 @@ function HonorsSection() {
 
 function SummaryCard({
   game,
+  activeSection,
+  onSectionChange,
   lastUpdated,
   characters,
   difficulties,
   favoriteSongs,
 }: {
   game: Game;
+  activeSection: string;
+  onSectionChange: (section: string) => void;
   lastUpdated: string | null;
   characters: CharacterSummary[];
   difficulties: Difficulty[];
   favoriteSongs: FavoriteSong[];
 }) {
   const hasData = characters.length > 0;
-  const [activeSection, setActiveSection] = useState("Summary");
   const allSections = ["Summary", ...game.sections];
 
   return (
@@ -2633,7 +2716,7 @@ function SummaryCard({
             return (
               <button
                 key={s}
-                onClick={() => setActiveSection(s)}
+                onClick={() => onSectionChange(s)}
                 className="rounded-full border px-3.5 py-1.5 text-[12.5px] font-semibold transition"
                 style={{
                   background: on ? "var(--accent)" : "var(--panel-2)",
@@ -2666,13 +2749,18 @@ function SummaryCard({
           <HonorsSection />
         )}
 
+        {game.slug === "genshin" && activeSection === "Characters" && (
+          <GenshinCharactersSection />
+        )}
+
         {activeSection !== "Summary" &&
           activeSection !== "Cards" &&
           activeSection !== "Music" &&
           activeSection !== "Events" &&
           activeSection !== "Stamps" &&
           activeSection !== "Kizuna" &&
-          activeSection !== "Honors" && (
+          activeSection !== "Honors" &&
+          !(game.slug === "genshin" && activeSection === "Characters") && (
             <div className="py-12 text-center text-[var(--muted)]">
               {activeSection} — coming soon
             </div>
@@ -2734,6 +2822,13 @@ function SummaryCard({
                 {/* Kizuna — all characters' honors grouped by team, full width */}
                 <KizunaGrid characters={characters} />
               </>
+            ) : game.slug === "genshin" ? (
+              <div>
+                <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wider text-[var(--muted)]">
+                  Favorite Characters
+                </h2>
+                <GenshinFavoritesSummary />
+              </div>
             ) : (
               <div>
                 <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wider text-[var(--muted)]">

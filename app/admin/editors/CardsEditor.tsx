@@ -23,6 +23,10 @@ type CharacterCard = {
   specialTraining: boolean | null;
 };
 
+// mirrors the frontend's CardBinder sort modes — "Release" = cardId asc,
+// since Sekai card IDs are assigned sequentially by release date.
+type SortMode = "rarity" | "owned" | "cardId";
+
 export default function CardsEditor() {
   const [chars, setChars] = useState<AdminChar[] | null>(null);
   const [charId, setCharId] = useState<number | null>(null);
@@ -85,6 +89,8 @@ function CharacterCardsPane({ characterId }: { characterId: number }) {
   const [cards, setCards] = useState<CharacterCard[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<SortMode>("rarity");
 
   useEffect(() => {
     gql(
@@ -134,25 +140,69 @@ function CharacterCardsPane({ characterId }: { characterId: number }) {
   const ownedCount = cards.filter((c) => c.owned).length;
   const selectedCard = cards.find((c) => c.cardId === selected) ?? null;
 
+  const filtered = cards
+    .filter((c) => c.name.toLowerCase().includes(query.trim().toLowerCase()))
+    .slice()
+    .sort((a, b) => {
+      if (sort === "owned") {
+        if (a.owned !== b.owned) return a.owned ? -1 : 1;
+        return b.rarity - a.rarity || a.cardId - b.cardId;
+      }
+      if (sort === "cardId") return a.cardId - b.cardId;
+      // default: rarity desc, then cardId
+      return b.rarity - a.rarity || a.cardId - b.cardId;
+    });
+
   return (
     <div>
-      <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
-        <div className="h-2 w-28 overflow-hidden rounded-full bg-[var(--panel)]">
-          <div
-            className="h-full rounded-full"
-            style={{
-              width: `${cards.length ? Math.round((ownedCount / cards.length) * 100) : 0}%`,
-              background: "var(--accent)",
-            }}
-          />
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2 text-xs text-[var(--muted)]">
+          <div className="h-2 w-28 overflow-hidden rounded-full bg-[var(--panel)]">
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${cards.length ? Math.round((ownedCount / cards.length) * 100) : 0}%`,
+                background: "var(--accent)",
+              }}
+            />
+          </div>
+          <span className="font-bold text-[var(--text)]">
+            {ownedCount}/{cards.length} owned
+          </span>
         </div>
-        <span className="font-bold text-[var(--text)]">
-          {ownedCount}/{cards.length} owned
-        </span>
+
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search cards…"
+          className="ml-auto w-full max-w-[200px] rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--accent)]"
+        />
+
+        <div className="inline-flex rounded-full border border-[var(--line)] bg-[var(--panel)] p-0.5 text-[11px] font-semibold">
+          {(
+            [
+              ["rarity", "Rarity"],
+              ["owned", "Owned"],
+              ["cardId", "Release"],
+            ] as [SortMode, string][]
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              onClick={() => setSort(m)}
+              className="rounded-full px-2.5 py-1 transition"
+              style={{
+                background: sort === m ? "var(--accent)" : "transparent",
+                color: sort === m ? "#0c0a1e" : "var(--muted)",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        {cards.map((c) => (
+        {filtered.map((c) => (
           <button
             key={c.cardId}
             onClick={() => setSelected(c.cardId)}
@@ -172,7 +222,16 @@ function CharacterCardsPane({ characterId }: { characterId: number }) {
               }}
               loading="lazy"
               onError={(e) => {
-                e.currentTarget.style.visibility = "hidden";
+                // some cards only have one art variant (e.g. certain collab
+                // cards have no untrained state) — try the other before
+                // giving up
+                const img = e.currentTarget;
+                if (img.dataset.fallback !== "1") {
+                  img.dataset.fallback = "1";
+                  img.src = cardArtUrl(c.assetbundleName, !c.specialTraining);
+                } else {
+                  img.style.visibility = "hidden";
+                }
               }}
             />
             <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1.5 py-1 text-center text-[11px] font-bold text-[#f0d15a]">
@@ -180,6 +239,11 @@ function CharacterCardsPane({ characterId }: { characterId: number }) {
             </div>
           </button>
         ))}
+        {filtered.length === 0 && (
+          <p className="col-span-full py-8 text-center text-sm text-[var(--muted)]">
+            No cards match &quot;{query}&quot;.
+          </p>
+        )}
       </div>
 
       {selectedCard && (
@@ -240,7 +304,16 @@ function CardModal({
                   filter: card.owned ? undefined : "grayscale(1) brightness(0.5)",
                 }}
                 onError={(e) => {
-                  e.currentTarget.style.visibility = "hidden";
+                  const img = e.currentTarget;
+                  if (img.dataset.fallback !== "1") {
+                    img.dataset.fallback = "1";
+                    img.src = cardArtUrl(
+                      card.assetbundleName,
+                      !card.specialTraining,
+                    );
+                  } else {
+                    img.style.visibility = "hidden";
+                  }
                 }}
               />
               <div className="absolute bottom-3 left-3 text-2xl font-bold text-[#f0d15a] drop-shadow">
@@ -283,17 +356,20 @@ function CardModal({
                   value={card.skillLevel ?? 1}
                   onCommit={(v) => onSave({ skillLevel: v })}
                 />
-                <label className="flex items-center justify-between text-xs text-[var(--muted)]">
-                  Special training
-                  <input
-                    type="checkbox"
-                    checked={card.specialTraining ?? false}
-                    onChange={(e) =>
-                      onSave({ specialTraining: e.target.checked })
-                    }
-                    className="accent-[var(--accent)]"
-                  />
-                </label>
+                {/* only 3★/4★ cards have a special-training state in-game */}
+                {card.rarity >= 3 && (
+                  <label className="flex items-center justify-between text-xs text-[var(--muted)]">
+                    Special training
+                    <input
+                      type="checkbox"
+                      checked={card.specialTraining ?? false}
+                      onChange={(e) =>
+                        onSave({ specialTraining: e.target.checked })
+                      }
+                      className="accent-[var(--accent)]"
+                    />
+                  </label>
+                )}
               </div>
             )}
           </div>

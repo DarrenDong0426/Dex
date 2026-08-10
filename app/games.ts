@@ -182,7 +182,7 @@ export const games: Game[] = [
     logoSrc: "/logos/genshin.png",
     info: [
       { value: "Itami", label: "username" },
-      { value: "800000000", label: "UID" },
+      { value: "613299997", label: "UID" },
       { value: "Oct 2020", label: "playing since" },
     ],
     hero: { value: "60", label: "adventure rank" },
@@ -192,7 +192,7 @@ export const games: Game[] = [
       { value: "36", label: "abyss ★" },
       { value: "5", label: "regions" },
     ],
-    sections: ["Characters", "Weapons", "Artifacts", "Abyss", "Creations"],
+    sections: ["Characters", "Creations"],
     favorites: [
       { name: "Furina", rank: "Lv90 · C2", badge: "Fontaine" },
       { name: "Neuvillette", rank: "Lv90 · C0", badge: "Fontaine" },

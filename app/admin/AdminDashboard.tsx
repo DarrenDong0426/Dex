@@ -17,6 +17,7 @@ import MusicEditor from "./editors/MusicEditor";
 import EventsEditor from "./editors/EventsEditor";
 import StampsEditor from "./editors/StampsEditor";
 import HonorsEditor from "./editors/HonorsEditor";
+import GenshinEditor from "./editors/GenshinEditor";
 
 type Entry = {
   slug: string;
@@ -42,8 +43,10 @@ const ENTRIES: Entry[] = [
     slug: "genshin",
     name: "Genshin Impact",
     kind: "game",
-    built: false,
-    sections: ["Characters", "Weapons", "Artifacts", "Abyss"],
+    built: true,
+    // synced wholesale from HoYoLAB (level/const/talents/weapon/artifacts)
+    // via GenshinEditor's "Sync now" — no manual editing, no CSV
+    sections: ["Characters"],
     hasCsv: false,
   },
   {
@@ -101,7 +104,11 @@ export default function AdminDashboard() {
               {entry.kind === "anime" ? "anime list" : "game data"} is built.
             </p>
           ) : (
-            <SectionEditor section={section} hasCsv={entry.hasCsv} />
+            <SectionEditor
+              entrySlug={entry.slug}
+              section={section}
+              hasCsv={entry.hasCsv}
+            />
           )}
         </div>
       </div>
@@ -316,38 +323,44 @@ function AdminHeader({
 // Placeholder editor — describes what each section will edit. Real editors
 // (with GraphQL mutations) replace this one section at a time.
 function SectionEditor({
+  entrySlug,
   section,
   hasCsv,
 }: {
+  entrySlug: string;
   section: string;
   hasCsv: boolean;
 }) {
   const WHAT: Record<string, string> = {
-    Characters:
+    "sekai:Characters":
       "Set favorite tier (Oshi / Favorite / HM) and character rank — favorited characters show on the profile's Summary tab.",
-    Cards: "Toggle owned, set level, master rank, and skill level per card.",
-    Music:
+    "sekai:Cards": "Toggle owned, set level, master rank, and skill level per card.",
+    "sekai:Music":
       "Set your play result (Clear / FC / AP) per song and difficulty, and star favorites for the Summary tab.",
-    Events: "Edit your final rank per event.",
-    Stamps: "Toggle which stamps you own.",
-    Honors: "Toggle owned honors and their level.",
+    "sekai:Events": "Edit your final rank per event.",
+    "sekai:Stamps": "Toggle which stamps you own.",
+    "sekai:Honors": "Toggle owned honors and their level.",
+    "genshin:Characters":
+      "Synced wholesale from HoYoLAB — level, constellation, talents, equipped weapon, and equipped artifacts (with substats) for every character you own. No manual editing; hit Sync to refresh.",
   };
 
   const BUILT_EDITORS: Record<string, React.ComponentType> = {
-    Characters: CharactersEditor,
-    Cards: CardsEditor,
-    Music: MusicEditor,
-    Events: EventsEditor,
-    Stamps: StampsEditor,
-    Honors: HonorsEditor,
+    "sekai:Characters": CharactersEditor,
+    "sekai:Cards": CardsEditor,
+    "sekai:Music": MusicEditor,
+    "sekai:Events": EventsEditor,
+    "sekai:Stamps": StampsEditor,
+    "sekai:Honors": HonorsEditor,
+    "genshin:Characters": GenshinEditor,
   };
-  const Editor = BUILT_EDITORS[section];
+  const key = `${entrySlug}:${section}`;
+  const Editor = BUILT_EDITORS[key];
 
   return (
     <div className="flex flex-col gap-4">
       <div className="border-b border-[var(--line)] pb-3">
         <p className="text-sm text-[var(--muted)]">
-          {WHAT[section] ?? "Editor for this section."}
+          {WHAT[key] ?? "Editor for this section."}
         </p>
       </div>
 

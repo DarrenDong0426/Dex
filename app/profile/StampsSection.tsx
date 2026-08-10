@@ -22,7 +22,6 @@ export default function StampsSection({
   const [typeFilter, setTypeFilter] = useState<"all" | "single" | "duo">("all");
 
   useEffect(() => {
-    if (STAMP_CACHE) return;
     let cancelled = false;
     fetch("/api/graphql", {
       method: "POST",

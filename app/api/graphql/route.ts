@@ -1,6 +1,26 @@
 import { createSchema, createYoga } from "graphql-yoga";
 import { prisma } from "@/lib/prisma";
 
+// resolves which splash art to show for a Genshin character — the default
+// HoYoLAB-synced image, or an owned costume's art if selectedCostumeId
+// points at one. The small profile icon (used in grids/tiles) always stays
+// the default art regardless of selection — only the full detail view
+// (splash art) switches.
+function resolveGenshinDisplay(c: {
+  image: string;
+  costumes: unknown;
+  selectedCostumeId: number | null;
+}): { image: string } {
+  const costumes = c.costumes as { id: number; name: string; icon: string }[];
+  const chosen =
+    c.selectedCostumeId != null
+      ? costumes.find((cs) => cs.id === c.selectedCostumeId)
+      : undefined;
+  return {
+    image: chosen?.icon ?? c.image,
+  };
+}
+
 // rank → rarity band (mirrors app/honor.ts)
 function rarityForRank(rank: number): "low" | "middle" | "high" | "highest" {
   if (rank >= 130) return "highest";
@@ -213,6 +233,8 @@ const { handleRequest } = createYoga({
         adminHonors: [AdminHonor!]!
         adminFanHonors: [FanHonorStatus!]!
         adminStats: AdminStats!
+        genshinCharacters: [GenshinCharacterItem!]!
+        genshinRoster: [GenshinRosterItem!]!
       }
       type AdminStats {
         characterCount: Int!
@@ -221,6 +243,78 @@ const { handleRequest } = createYoga({
         eventCount: Int!
         stampCount: Int!
         honorCount: Int!
+      }
+      type GenshinSubstat {
+        name: String!
+        value: String!
+      }
+      type GenshinArtifactItem {
+        slot: String!
+        setName: String!
+        icon: String!
+        rarity: Int!
+        level: Int!
+        mainStatName: String!
+        mainStatValue: String!
+        substats: [GenshinSubstat!]!
+      }
+      type GenshinCostumeItem {
+        id: Int!
+        name: String!
+        icon: String!
+      }
+      type GenshinCharacterItem {
+        id: Int!
+        name: String!
+        element: String!
+        rarity: Int!
+        icon: String!
+        image: String!
+        baseIcon: String!
+        stats: [GenshinSubstat!]!
+        level: Int!
+        constellation: Int!
+        friendship: Int!
+        normalAttackLvl: Int!
+        elementalSkillLvl: Int!
+        elementalBurstLvl: Int!
+        weaponId: Int!
+        weaponName: String!
+        weaponIcon: String!
+        weaponRarity: Int!
+        weaponLevel: Int!
+        weaponRefinement: Int!
+        isFavorite: Boolean!
+        artifacts: [GenshinArtifactItem!]!
+        costumes: [GenshinCostumeItem!]!
+        selectedCostumeId: Int
+        updatedAt: String!
+      }
+      type GenshinRosterItem {
+        id: Int!
+        name: String!
+        element: String!
+        rarity: Int!
+        icon: String!
+        owned: Boolean!
+        region: String!
+        image: String
+        baseIcon: String
+        stats: [GenshinSubstat!]
+        level: Int
+        constellation: Int
+        friendship: Int
+        normalAttackLvl: Int
+        elementalSkillLvl: Int
+        elementalBurstLvl: Int
+        weaponName: String
+        weaponIcon: String
+        weaponRarity: Int
+        weaponLevel: Int
+        weaponRefinement: Int
+        artifacts: [GenshinArtifactItem!]
+        costumes: [GenshinCostumeItem!]
+        selectedCostumeId: Int
       }
       type AdminCharacter {
         characterId: Int!
@@ -262,6 +356,8 @@ const { handleRequest } = createYoga({
         setStampEdit(stampId: Int!, owned: Boolean!): StampItem!
         setHonorEdit(honorId: Int!, owned: Boolean!, level: Int): AdminHonor!
         setFanHonorLevel(characterId: Int!, level: Int!): FanHonorStatus!
+        setGenshinFavorite(characterId: Int!, favorite: Boolean!): GenshinCharacterItem!
+        setGenshinCostume(characterId: Int!, costumeId: Int): GenshinCharacterItem!
       }
     `,
     resolvers: {
@@ -759,6 +855,131 @@ const { handleRequest } = createYoga({
           };
         },
 
+        genshinCharacters: async () => {
+          const chars = await prisma.genshinCharacter.findMany({
+            include: { artifacts: true },
+            orderBy: { level: "desc" },
+          });
+          return chars.map((c) => ({
+            ...c,
+            ...resolveGenshinDisplay(c),
+            baseIcon: c.icon,
+            stats: c.stats as { name: string; value: string }[],
+            costumes: c.costumes as { id: number; name: string; icon: string }[],
+            updatedAt: String(c.updatedAt.getTime()),
+            artifacts: c.artifacts.map((a) => ({
+              ...a,
+              substats: a.substats as { name: string; value: string }[],
+            })),
+          }));
+        },
+
+        genshinRoster: async () => {
+          const [owned, master] = await Promise.all([
+            prisma.genshinCharacter.findMany({ include: { artifacts: true } }),
+            prisma.genshinCharacterMaster.findMany(),
+          ]);
+
+          type Row = {
+            id: number;
+            name: string;
+            element: string;
+            rarity: number;
+            icon: string;
+            owned: boolean;
+            region: string;
+            image: string | null;
+            baseIcon: string | null;
+            stats: { name: string; value: string }[] | null;
+            level: number | null;
+            constellation: number | null;
+            friendship: number | null;
+            normalAttackLvl: number | null;
+            elementalSkillLvl: number | null;
+            elementalBurstLvl: number | null;
+            weaponName: string | null;
+            weaponIcon: string | null;
+            weaponRarity: number | null;
+            weaponLevel: number | null;
+            weaponRefinement: number | null;
+            artifacts:
+              | { slot: string; setName: string; icon: string; rarity: number; level: number; mainStatName: string; mainStatValue: string; substats: { name: string; value: string }[] }[]
+              | null;
+            costumes: { id: number; name: string; icon: string }[] | null;
+            selectedCostumeId: number | null;
+          };
+
+          const ownedNames = new Set(owned.map((c) => c.name.toLowerCase()));
+          const masterById = new Map(master.map((m) => [m.id, m]));
+          const masterByName = new Map(master.map((m) => [m.name.toLowerCase(), m]));
+          const regionFor = (c: { id: number; name: string }) =>
+            masterById.get(c.id)?.region ?? masterByName.get(c.name.toLowerCase())?.region ?? "Other";
+
+          const rows: Row[] = owned.map((c) => {
+            const disp = resolveGenshinDisplay(c);
+            return {
+            id: c.id,
+            name: c.name,
+            element: c.element,
+            rarity: c.rarity,
+            icon: c.icon,
+            owned: true,
+            region: regionFor(c),
+            image: disp.image,
+            baseIcon: c.icon,
+            stats: c.stats as { name: string; value: string }[],
+            level: c.level,
+            constellation: c.constellation,
+            friendship: c.friendship,
+            normalAttackLvl: c.normalAttackLvl,
+            elementalSkillLvl: c.elementalSkillLvl,
+            elementalBurstLvl: c.elementalBurstLvl,
+            weaponName: c.weaponName,
+            weaponIcon: c.weaponIcon,
+            weaponRarity: c.weaponRarity,
+            weaponLevel: c.weaponLevel,
+            weaponRefinement: c.weaponRefinement,
+            artifacts: c.artifacts.map((a) => ({
+              ...a,
+              substats: a.substats as { name: string; value: string }[],
+            })),
+            costumes: c.costumes as { id: number; name: string; icon: string }[],
+            selectedCostumeId: c.selectedCostumeId,
+            };
+          });
+
+          for (const m of master) {
+            if (ownedNames.has(m.name.toLowerCase())) continue;
+            rows.push({
+              id: m.id,
+              name: m.name,
+              element: m.element,
+              rarity: m.rarity,
+              icon: m.icon,
+              owned: false,
+              region: m.region,
+              image: null,
+              baseIcon: null,
+              stats: null,
+              level: null,
+              constellation: null,
+              friendship: null,
+              normalAttackLvl: null,
+              elementalSkillLvl: null,
+              elementalBurstLvl: null,
+              weaponName: null,
+              weaponIcon: null,
+              weaponRarity: null,
+              weaponLevel: null,
+              weaponRefinement: null,
+              artifacts: null,
+              costumes: null,
+              selectedCostumeId: null,
+            });
+          }
+          return rows;
+        },
+
         bondHonorList: async () => {
           const [bonds, userBonds] = await Promise.all([
             prisma.bondHonor.findMany({ orderBy: { id: "asc" } }),
@@ -862,6 +1083,12 @@ const { handleRequest } = createYoga({
             specialTraining?: boolean | null;
           },
         ) => {
+          const card = await prisma.card.findUniqueOrThrow({
+            where: { id: cardId },
+          });
+          // only 3★/4★ cards have a special-training state in-game
+          const st = card.rarity >= 3 ? specialTraining : false;
+
           if (owned) {
             await prisma.userCard.upsert({
               where: { cardId },
@@ -869,23 +1096,20 @@ const { handleRequest } = createYoga({
                 ...(level != null ? { level } : {}),
                 ...(masterRank != null ? { masterRank } : {}),
                 ...(skillLevel != null ? { skillLevel } : {}),
-                ...(specialTraining != null ? { specialTraining } : {}),
+                ...(st != null ? { specialTraining: st } : {}),
               },
               create: {
                 cardId,
                 level: level ?? 1,
                 masterRank: masterRank ?? 0,
                 skillLevel: skillLevel ?? 1,
-                specialTraining: specialTraining ?? false,
+                specialTraining: st ?? false,
               },
             });
           } else {
             await prisma.userCard.deleteMany({ where: { cardId } });
           }
-          const [card, uc] = await Promise.all([
-            prisma.card.findUniqueOrThrow({ where: { id: cardId } }),
-            prisma.userCard.findUnique({ where: { cardId } }),
-          ]);
+          const uc = await prisma.userCard.findUnique({ where: { cardId } });
           return {
             cardId: card.id,
             name: card.name,
@@ -1069,6 +1293,52 @@ const { handleRequest } = createYoga({
             rarity,
             tierLevel: rarity ? tierLevel : null,
             tierMaxLevel: rarity ? tierMaxLevel : null,
+          };
+        },
+
+        setGenshinFavorite: async (
+          _: unknown,
+          { characterId, favorite }: { characterId: number; favorite: boolean },
+        ) => {
+          const c = await prisma.genshinCharacter.update({
+            where: { id: characterId },
+            data: { isFavorite: favorite },
+            include: { artifacts: true },
+          });
+          return {
+            ...c,
+            ...resolveGenshinDisplay(c),
+            baseIcon: c.icon,
+            stats: c.stats as { name: string; value: string }[],
+            costumes: c.costumes as { id: number; name: string; icon: string }[],
+            updatedAt: String(c.updatedAt.getTime()),
+            artifacts: c.artifacts.map((a) => ({
+              ...a,
+              substats: a.substats as { name: string; value: string }[],
+            })),
+          };
+        },
+
+        setGenshinCostume: async (
+          _: unknown,
+          { characterId, costumeId }: { characterId: number; costumeId?: number | null },
+        ) => {
+          const c = await prisma.genshinCharacter.update({
+            where: { id: characterId },
+            data: { selectedCostumeId: costumeId ?? null },
+            include: { artifacts: true },
+          });
+          return {
+            ...c,
+            ...resolveGenshinDisplay(c),
+            baseIcon: c.icon,
+            stats: c.stats as { name: string; value: string }[],
+            costumes: c.costumes as { id: number; name: string; icon: string }[],
+            updatedAt: String(c.updatedAt.getTime()),
+            artifacts: c.artifacts.map((a) => ({
+              ...a,
+              substats: a.substats as { name: string; value: string }[],
+            })),
           };
         },
       },
