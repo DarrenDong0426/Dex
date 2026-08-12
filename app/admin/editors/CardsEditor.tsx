@@ -6,7 +6,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { charaIcon, cardArtUrl } from "@/app/profile/images";
+import {
+  charaIcon,
+  cardArtUrl,
+  rarityGlyph,
+  maxLevelForRarity,
+  MAX_MASTER_RANK,
+  MAX_SKILL_LEVEL,
+} from "@/app/profile/images";
 import { gql } from "./gql";
 
 type AdminChar = { characterId: number; name: string };
@@ -235,7 +242,7 @@ function CharacterCardsPane({ characterId }: { characterId: number }) {
               }}
             />
             <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1.5 py-1 text-center text-[11px] font-bold text-[#f0d15a]">
-              {"★".repeat(c.rarity)}
+              {rarityGlyph(c.rarity)}
             </div>
           </button>
         ))}
@@ -317,7 +324,7 @@ function CardModal({
                 }}
               />
               <div className="absolute bottom-3 left-3 text-2xl font-bold text-[#f0d15a] drop-shadow">
-                {"★".repeat(card.rarity)}
+                {rarityGlyph(card.rarity)}
               </div>
             </div>
           </div>
@@ -344,16 +351,19 @@ function CardModal({
                 <NumberField
                   label="Level"
                   value={card.level ?? 1}
+                  max={maxLevelForRarity(card.rarity)}
                   onCommit={(v) => onSave({ level: v })}
                 />
                 <NumberField
                   label="Master rank"
                   value={card.masterRank ?? 0}
+                  max={MAX_MASTER_RANK}
                   onCommit={(v) => onSave({ masterRank: v })}
                 />
                 <NumberField
                   label="Skill level"
                   value={card.skillLevel ?? 1}
+                  max={MAX_SKILL_LEVEL}
                   onCommit={(v) => onSave({ skillLevel: v })}
                 />
                 {/* only 3★/4★ cards have a special-training state in-game */}
@@ -382,22 +392,27 @@ function CardModal({
 function NumberField({
   label,
   value,
+  max,
   onCommit,
 }: {
   label: string;
   value: number;
+  max: number;
   onCommit: (v: number) => void;
 }) {
   return (
     <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted)]">
-      {label}
+      <span>
+        {label} <span className="opacity-70">(max {max})</span>
+      </span>
       <input
         type="number"
         min={0}
+        max={max}
         defaultValue={value}
         key={value}
         onBlur={(e) => {
-          const v = parseInt(e.target.value, 10);
+          const v = Math.min(max, parseInt(e.target.value, 10));
           if (!Number.isNaN(v) && v !== value) onCommit(v);
         }}
         className="w-16 rounded border border-[var(--line)] bg-[var(--panel)] px-2 py-1 text-right text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"

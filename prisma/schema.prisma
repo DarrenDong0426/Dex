@@ -23,6 +23,32 @@ model Profile {
   updatedAt DateTime @default(now()) @updatedAt
 }
 
+// Singleton (always id=1) — backs the site-wide ProfileBanner (name/alias/
+// avatar/bio/socials), editable from the admin "Logistics" section. Not
+// game-specific — that's what the per-game Profile/games.ts info is for.
+model SiteProfile {
+  id             Int      @id @default(1)
+  displayName    String   @default("ITAMI")
+  alias          String   @default("NONAME")
+  avatarUrl      String   @default("/pfp.png")
+  bio            String   @default("")
+  instagramLabel String   @default("")
+  instagramUrl   String   @default("")
+  discordLabel   String   @default("")
+  discordUrl     String   @default("")
+  updatedAt      DateTime @default(now()) @updatedAt
+}
+
+// Manual display order for the top-level game/anime entries (Sekai/Genshin/
+// Anime) — the sidebar icon rail, the profile's folder tabs, and the
+// admin's own entry switcher all follow this. One row per games.ts slug;
+// edited from the admin "Logistics" section. No row for a slug = falls
+// back to games.ts's own array order for that entry.
+model EntryOrder {
+  slug  String @id
+  order Int
+}
+
 model Card {
   id              Int        @id
   name            String
@@ -271,4 +297,31 @@ model GenshinArtifact {
   mainStatName  String
   mainStatValue String
   substats      Json // [{ name: string, value: string }]
+}
+
+// Manually added via the admin panel (paste a MAL URL) — Dex never syncs
+// from a MyAnimeList account/list, it only pulls public title metadata
+// (title/image/synopsis) from Jikan (api.jikan.moe, a free MAL mirror) at
+// add-time. Status/type are Darren's own tracking, not MAL's.
+model AnimeEntry {
+  id        Int      @id // MAL id (mal_id from Jikan)
+  title     String
+  image     String
+  synopsis  String?
+  url       String // MAL page link
+  mediaType String // "Anime" | "Manga" | "Light Novel"
+  status    String // "Watching" | "Caught Up" | "Finished" | "Waitlist"
+  isFavorite Boolean @default(false) // manual, admin-only — up to a handful shown on the Summary tab
+  isQueued   Boolean @default(false) // manual, admin-only — explicitly curated
+  // selection for the Summary tab's "Next in Queue", independent of status.
+  // Being "Waitlist" doesn't imply isQueued — admin picks which ones surface.
+  queueOrder Int? // manual drag-reorder position within whichever status group
+  // the entry currently sits in on the admin board — null falls back to
+  // createdAt order.
+  parentId  Int? // set when this is a season/part of another entry — MAL
+  // gives each season its own id/page, so seasons link to a parent title
+  // here while keeping their own independent status
+  parent    AnimeEntry?  @relation("Seasons", fields: [parentId], references: [id])
+  seasons   AnimeEntry[] @relation("Seasons")
+  createdAt DateTime     @default(now())
 }

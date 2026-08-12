@@ -7,6 +7,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { games, themes, type Mode } from "@/app/games";
+import { useThemeMode } from "@/app/useThemeMode";
 import BackgroundFX from "@/app/BackgroundFX";
 import ThemeToggle from "@/app/ThemeToggle";
 import { logoutAction } from "./actions";
@@ -18,6 +19,8 @@ import EventsEditor from "./editors/EventsEditor";
 import StampsEditor from "./editors/StampsEditor";
 import HonorsEditor from "./editors/HonorsEditor";
 import GenshinEditor from "./editors/GenshinEditor";
+import AnimeEditor from "./editors/AnimeEditor";
+import LogisticsEditor from "./editors/LogisticsEditor";
 
 type Entry = {
   slug: string;
@@ -53,22 +56,88 @@ const ENTRIES: Entry[] = [
     slug: "anime",
     name: "Anime",
     kind: "anime",
-    built: false,
+    built: true,
     sections: ["Library"],
     hasCsv: false,
   },
 ];
 
+// mirrors the frontend Sidebar/FolderTabs' entryOrder fetch (app/ProfileClient.tsx)
+// so the admin's own entry switcher shows entries in the same admin-set order.
+let ADMIN_ENTRY_ORDER_CACHE: string[] | null = null;
+
+function useOrderedEntries(): [Entry[], (fromSlug: string, toSlug: string) => void] {
+  const [order, setOrder] = useState<string[]>(
+    ADMIN_ENTRY_ORDER_CACHE ?? ENTRIES.map((e) => e.slug),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: `{ entryOrder }` }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const list = j?.data?.entryOrder;
+        if (Array.isArray(list)) {
+          ADMIN_ENTRY_ORDER_CACHE = list;
+          setOrder(list);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // drops `fromSlug` right before `toSlug`'s current position, persisting
+  // right away — no separate save step, since this lives directly in the
+  // sidebar rather than a form. Removing `fromSlug` first and re-finding
+  // `toSlug`'s index in the filtered array (rather than splicing at a
+  // pre-removal index) keeps this correct regardless of drag direction.
+  function reorderEntry(fromSlug: string, toSlug: string) {
+    setOrder((prev) => {
+      if (fromSlug === toSlug) return prev;
+      const filtered = prev.filter((s) => s !== fromSlug);
+      const toIndex = filtered.indexOf(toSlug);
+      if (toIndex === -1) return prev;
+      filtered.splice(toIndex, 0, fromSlug);
+      ADMIN_ENTRY_ORDER_CACHE = filtered;
+      fetch("/api/graphql", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: `mutation($s:[String!]!){ setEntryOrder(orderedSlugs:$s) }`,
+          variables: { s: filtered },
+        }),
+      }).catch(() => {});
+      return filtered;
+    });
+  }
+
+  const bySlug = new Map(ENTRIES.map((e) => [e.slug, e]));
+  const ordered = order
+    .map((slug) => bySlug.get(slug))
+    .filter((e): e is Entry => Boolean(e));
+  for (const e of ENTRIES) if (!ordered.includes(e)) ordered.push(e);
+  return [ordered, reorderEntry];
+}
+
 export default function AdminDashboard() {
+  const [view, setView] = useState<"entry" | "logistics">("entry");
   const [entrySlug, setEntrySlug] = useState("sekai");
   const entry = ENTRIES.find((e) => e.slug === entrySlug)!;
   const [section, setSection] = useState(entry.sections[0]);
-  const [mode, setMode] = useState<Mode>("dark");
+  const [mode, setMode] = useThemeMode();
 
   function pickEntry(slug: string) {
     const e = ENTRIES.find((x) => x.slug === slug)!;
     setEntrySlug(slug);
     setSection(e.sections[0]); // reset to that entry's first section
+    setView("entry");
   }
 
   async function logout() {
@@ -83,6 +152,8 @@ export default function AdminDashboard() {
     >
       <BackgroundFX mode={mode} />
       <Sidebar
+        view={view}
+        onPickLogistics={() => setView("logistics")}
         entrySlug={entrySlug}
         onPickEntry={pickEntry}
         section={section}
@@ -90,27 +161,44 @@ export default function AdminDashboard() {
         entry={entry}
         onLogout={logout}
         mode={mode}
-        onToggleMode={() => setMode((m) => (m === "dark" ? "light" : "dark"))}
+        onToggleMode={() => setMode(mode === "dark" ? "light" : "dark")}
       />
 
       <div className="relative z-10 min-w-0 flex-1 p-8">
-        <AdminHeader entryName={entry.name} section={section} />
-
-        <div className="mt-6 rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-6 shadow-[0_16px_50px_-30px_rgba(0,0,0,0.6)]">
-          {!entry.built ? (
-            <p className="text-sm text-[var(--muted)]">
-              {entry.name} isn&apos;t wired into the app yet — its editors
-              come once the{" "}
-              {entry.kind === "anime" ? "anime list" : "game data"} is built.
-            </p>
-          ) : (
-            <SectionEditor
-              entrySlug={entry.slug}
-              section={section}
-              hasCsv={entry.hasCsv}
-            />
-          )}
-        </div>
+        {view === "logistics" ? (
+          <>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-[var(--muted)]">
+                Site
+              </p>
+              <h1 className="text-2xl font-extrabold text-[var(--text)]">
+                Logistics
+              </h1>
+            </div>
+            <div className="mt-6 rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-6 shadow-[0_16px_50px_-30px_rgba(0,0,0,0.6)]">
+              <LogisticsEditor />
+            </div>
+          </>
+        ) : (
+          <>
+            <AdminHeader entrySlug={entry.slug} entryName={entry.name} section={section} />
+            <div className="mt-6 rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-6 shadow-[0_16px_50px_-30px_rgba(0,0,0,0.6)]">
+              {!entry.built ? (
+                <p className="text-sm text-[var(--muted)]">
+                  {entry.name} isn&apos;t wired into the app yet — its editors
+                  come once the{" "}
+                  {entry.kind === "anime" ? "anime list" : "game data"} is built.
+                </p>
+              ) : (
+                <SectionEditor
+                  entrySlug={entry.slug}
+                  section={section}
+                  hasCsv={entry.hasCsv}
+                />
+              )}
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -119,6 +207,8 @@ export default function AdminDashboard() {
 /* ---------- sidebar: entry switcher + section nav ---------- */
 
 function Sidebar({
+  view,
+  onPickLogistics,
   entrySlug,
   onPickEntry,
   entry,
@@ -128,6 +218,8 @@ function Sidebar({
   mode,
   onToggleMode,
 }: {
+  view: "entry" | "logistics";
+  onPickLogistics: () => void;
   entrySlug: string;
   onPickEntry: (slug: string) => void;
   entry: Entry;
@@ -138,6 +230,8 @@ function Sidebar({
   onToggleMode: () => void;
 }) {
   const router = useRouter();
+  const [orderedEntries, reorderEntry] = useOrderedEntries();
+  const [dragSlug, setDragSlug] = useState<string | null>(null);
   const brandClicks = useRef(0);
   const brandClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -175,70 +269,120 @@ function Sidebar({
 
       <div className="mx-5 mb-3 h-px bg-[var(--line)]" />
 
-      {/* entry switcher */}
+      {/* entry switcher — drag the ⋮⋮ handle to reorder, persisted
+          immediately (setEntryOrder) since there's no separate save step
+          in a sidebar. Handle carries the drag (not the whole row) so it
+          doesn't fight the button's onClick. */}
       <div className="flex flex-col gap-1 px-3">
-        {ENTRIES.map((e) => {
+        {orderedEntries.map((e) => {
           const on = e.slug === entrySlug;
           const g = games.find((x) => x.slug === e.slug);
           return (
-            <button
+            <div
               key={e.slug}
-              onClick={() => onPickEntry(e.slug)}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] font-semibold transition"
-              style={{
-                background: on ? "var(--panel-2)" : "transparent",
-                color: on ? "var(--text)" : "var(--muted)",
+              onDragOver={(ev) => {
+                ev.preventDefault();
+                ev.dataTransfer.dropEffect = "move";
               }}
+              onDrop={(ev) => {
+                ev.preventDefault();
+                const from = dragSlug ?? ev.dataTransfer.getData("text/plain");
+                if (from && from !== e.slug) reorderEntry(from, e.slug);
+                setDragSlug(null);
+              }}
+              className="flex items-center gap-1"
             >
-              {g && (
-                <span
-                  className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center overflow-hidden rounded-md text-[9px] font-extrabold text-white"
-                  style={{ background: g.logoBg }}
-                >
-                  {g.logoSrc ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={g.logoSrc}
-                      alt=""
-                      className="h-full w-full object-contain p-0.5"
-                    />
-                  ) : (
-                    g.logo
-                  )}
-                </span>
-              )}
-              <span className="truncate">{e.name}</span>
-              {!e.built && (
-                <span className="ml-auto text-[9px] font-normal opacity-60">
-                  soon
-                </span>
-              )}
-            </button>
+              <button
+                onClick={() => onPickEntry(e.slug)}
+                className="flex flex-1 min-w-0 items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] font-semibold transition"
+                style={{
+                  background: on ? "var(--panel-2)" : "transparent",
+                  color: on ? "var(--text)" : "var(--muted)",
+                }}
+              >
+                {g && (
+                  <span
+                    className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center overflow-hidden rounded-md text-[9px] font-extrabold text-white"
+                    style={{ background: g.logoBg }}
+                  >
+                    {g.logoSrc ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={g.logoSrc}
+                        alt=""
+                        className="h-full w-full object-contain p-0.5"
+                      />
+                    ) : (
+                      g.logo
+                    )}
+                  </span>
+                )}
+                <span className="truncate">{e.name}</span>
+                {!e.built && (
+                  <span className="ml-auto text-[9px] font-normal opacity-60">
+                    soon
+                  </span>
+                )}
+              </button>
+              <span
+                draggable
+                onDragStart={(ev) => {
+                  ev.dataTransfer.setData("text/plain", e.slug);
+                  ev.dataTransfer.effectAllowed = "move";
+                  setDragSlug(e.slug);
+                }}
+                onDragEnd={() => setDragSlug(null)}
+                title="Drag to reorder"
+                aria-label={`Drag to reorder ${e.name}`}
+                className="flex h-7 w-4 flex-shrink-0 cursor-grab select-none items-center justify-center rounded text-[11px] leading-none text-[var(--muted)] transition hover:text-[var(--text)] active:cursor-grabbing"
+              >
+                ⋮⋮
+              </span>
+            </div>
           );
         })}
+
+        {/* site-wide, not tied to any game — separate from the entry switcher above */}
+        <button
+          onClick={onPickLogistics}
+          className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] font-semibold transition"
+          style={{
+            background: view === "logistics" ? "var(--panel-2)" : "transparent",
+            color: view === "logistics" ? "var(--text)" : "var(--muted)",
+          }}
+        >
+          <span className="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md text-xs">
+            ⚙️
+          </span>
+          <span className="truncate">Logistics</span>
+        </button>
       </div>
 
       <div className="mx-5 my-3 h-px bg-[var(--line)]" />
 
-      {/* section nav for the active entry */}
-      <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3">
-        {entry.sections.map((s) => {
-          const on = s === section;
-          return (
-            <button
-              key={s}
-              onClick={() => onPickSection(s)}
-              className="relative rounded-lg px-2.5 py-2 text-left text-[12.5px] font-bold transition"
-              style={{
-                background: on ? "var(--accent)" : "transparent",
-                color: on ? "#0c0a1e" : "var(--muted)",
-              }}
-            >
-              {s}
-            </button>
-          );
-        })}
-      </div>
+      {/* section nav for the active entry — not shown in Logistics, which
+          has no sub-sections */}
+      {view === "entry" && (
+        <div className="flex flex-1 flex-col gap-0.5 overflow-y-auto px-3">
+          {entry.sections.map((s) => {
+            const on = s === section;
+            return (
+              <button
+                key={s}
+                onClick={() => onPickSection(s)}
+                className="relative rounded-lg px-2.5 py-2 text-left text-[12.5px] font-bold transition"
+                style={{
+                  background: on ? "var(--accent)" : "transparent",
+                  color: on ? "#0c0a1e" : "var(--muted)",
+                }}
+              >
+                {s}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {view === "logistics" && <div className="flex-1" />}
 
       <div className="flex items-center justify-between gap-2 border-t border-[var(--line)] p-3">
         <ThemeToggle mode={mode} onToggle={onToggleMode} />
@@ -262,12 +406,21 @@ type AdminStats = {
   eventCount: number;
   stampCount: number;
   honorCount: number;
+  genshinCharacterCount: number;
+  genshinFavoriteCount: number;
+  animeCount: number;
+  animeWatchingCount: number;
+  animeFinishedCount: number;
+  animeFavoriteCount: number;
+  animeQueuedCount: number;
 };
 
 function AdminHeader({
+  entrySlug,
   entryName,
   section,
 }: {
+  entrySlug: string;
   entryName: string;
   section: string;
 }) {
@@ -275,22 +428,35 @@ function AdminHeader({
 
   useEffect(() => {
     gql(
-      `{ adminStats { characterCount cardCount songFavoriteCount eventCount stampCount honorCount } }`,
+      `{ adminStats { characterCount cardCount songFavoriteCount eventCount stampCount honorCount genshinCharacterCount genshinFavoriteCount animeCount animeWatchingCount animeFinishedCount animeFavoriteCount animeQueuedCount } }`,
     )
       .then((d) => setStats(d.adminStats))
       .catch(() => {});
   }, []);
 
-  const tiles: { value: number; label: string }[] = stats
-    ? [
-        { value: stats.characterCount, label: "characters" },
-        { value: stats.cardCount, label: "cards" },
-        { value: stats.songFavoriteCount, label: "favorite songs" },
-        { value: stats.eventCount, label: "events ranked" },
-        { value: stats.stampCount, label: "stamps" },
-        { value: stats.honorCount, label: "honors" },
-      ]
-    : [];
+  // tiles match whichever entry is currently active, not always Sekai
+  const TILE_SETS: Record<string, (s: AdminStats) => { value: number; label: string }[]> = {
+    sekai: (s) => [
+      { value: s.characterCount, label: "characters" },
+      { value: s.cardCount, label: "cards" },
+      { value: s.songFavoriteCount, label: "favorite songs" },
+      { value: s.eventCount, label: "events ranked" },
+      { value: s.stampCount, label: "stamps" },
+      { value: s.honorCount, label: "honors" },
+    ],
+    genshin: (s) => [
+      { value: s.genshinCharacterCount, label: "characters" },
+      { value: s.genshinFavoriteCount, label: "favorites" },
+    ],
+    anime: (s) => [
+      { value: s.animeCount, label: "titles" },
+      { value: s.animeWatchingCount, label: "watching" },
+      { value: s.animeFinishedCount, label: "finished" },
+      { value: s.animeFavoriteCount, label: "favorites" },
+      { value: s.animeQueuedCount, label: "queued" },
+    ],
+  };
+  const tiles = stats ? (TILE_SETS[entrySlug]?.(stats) ?? []) : [];
 
   return (
     <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
@@ -342,6 +508,8 @@ function SectionEditor({
     "sekai:Honors": "Toggle owned honors and their level.",
     "genshin:Characters":
       "Synced wholesale from HoYoLAB — level, constellation, talents, equipped weapon, and equipped artifacts (with substats) for every character you own. No manual editing; hit Sync to refresh.",
+    "anime:Library":
+      "Paste a MyAnimeList anime or manga/light-novel URL to add it — title, cover art, and synopsis are pulled from Jikan (a free MAL mirror). Dex never syncs your actual MAL list; set status per title here.",
   };
 
   const BUILT_EDITORS: Record<string, React.ComponentType> = {
@@ -352,6 +520,7 @@ function SectionEditor({
     "sekai:Stamps": StampsEditor,
     "sekai:Honors": HonorsEditor,
     "genshin:Characters": GenshinEditor,
+    "anime:Library": AnimeEditor,
   };
   const key = `${entrySlug}:${section}`;
   const Editor = BUILT_EDITORS[key];

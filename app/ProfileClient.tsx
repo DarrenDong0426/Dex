@@ -3,11 +3,15 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { games, themes, type Game, type Mode } from "@/app/games";
+import { useThemeMode } from "@/app/useThemeMode";
 import BackgroundFX from "@/app/BackgroundFX";
 import ThemeToggle from "@/app/ThemeToggle";
 import StampsSection from "@/app/profile/StampsSection";
 import GenshinCharactersSection from "@/app/profile/GenshinCharactersSection";
 import GenshinFavoritesSummary from "@/app/profile/GenshinFavoritesSummary";
+import AnimeLibrarySection from "@/app/profile/AnimeLibrarySection";
+import AnimeSummary from "@/app/profile/AnimeSummary";
+import { rarityGlyph } from "@/app/profile/images";
 import {
   fanHonorForRank,
   pips,
@@ -112,9 +116,14 @@ export default function ProfileClient({
   profile: ProfileData;
   summary: Summary;
 }) {
-  const [activeSlug, setActiveSlug] = useState(() => parseHash()?.slug ?? games[0].slug);
-  const [activeSection, setActiveSection] = useState(() => parseHash()?.section ?? "Summary");
-  const [mode, setMode] = useState<Mode>("dark");
+  // NOTE: don't read window.location.hash in these useState initializers —
+  // this component is SSR-ed, and the server always renders the default
+  // (it has no hash to read), so seeding a different value client-side
+  // would mismatch the server HTML and trigger a hydration error. Instead,
+  // apply the deep link in an effect below, which only ever runs client-side.
+  const [activeSlug, setActiveSlug] = useState(games[0].slug);
+  const [activeSection, setActiveSection] = useState("Summary");
+  const [mode, setMode] = useThemeMode();
 
   const active = games.find((g) => g.slug === activeSlug) ?? games[0];
   const vars = themes[active.slug][mode] as React.CSSProperties;
@@ -128,9 +137,24 @@ export default function ProfileClient({
     setActiveSection(["Summary", ...game.sections][0]);
   }
 
-  // keep the URL hash in sync so the current game+section can be bookmarked
-  // or shared as a direct link
+  // apply a deep link once mounted client-side
   useEffect(() => {
+    const parsed = parseHash();
+    if (!parsed) return;
+    setActiveSlug(parsed.slug);
+    setActiveSection(parsed.section);
+  }, []);
+
+  // keep the URL hash in sync so the current game+section can be bookmarked
+  // or shared as a direct link — skip the very first run, since at that
+  // point state is still the SSR default and hasn't picked up the deep
+  // link from the effect above yet (avoids briefly clobbering the URL).
+  const skippedFirstSync = useRef(false);
+  useEffect(() => {
+    if (!skippedFirstSync.current) {
+      skippedFirstSync.current = true;
+      return;
+    }
     const hash = `#${activeSlug}-${sectionToSlug(activeSection)}`;
     if (window.location.hash !== hash) {
       history.replaceState(null, "", hash);
@@ -224,6 +248,49 @@ export default function ProfileClient({
 }
 
 
+/* ---------- admin-editable top-level entry order ---------- */
+
+// games.ts's own array order is just the fallback — an admin can override
+// display order (sidebar icon rail + folder tabs) from the Logistics
+// section without touching code. Self-fetching (like ProfileBanner above)
+// rather than prop-drilled, since both Sidebar and FolderTabs need it.
+let ENTRY_ORDER_CACHE: string[] | null = null;
+
+function useOrderedGames(): Game[] {
+  const [order, setOrder] = useState<string[]>(
+    ENTRY_ORDER_CACHE ?? games.map((g) => g.slug),
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: `{ entryOrder }` }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const list = j?.data?.entryOrder;
+        if (Array.isArray(list)) {
+          ENTRY_ORDER_CACHE = list;
+          setOrder(list);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const bySlug = new Map(games.map((g) => [g.slug, g]));
+  const ordered = order
+    .map((slug) => bySlug.get(slug))
+    .filter((g): g is Game => Boolean(g));
+  for (const g of games) if (!ordered.includes(g)) ordered.push(g);
+  return ordered;
+}
+
 /* ---------- full-height sidebar ---------- */
 
 function Sidebar({
@@ -238,6 +305,7 @@ function Sidebar({
   onToggleMode: () => void;
 }) {
   const router = useRouter();
+  const orderedGames = useOrderedGames();
   const pfpClicks = useRef(0);
   const pfpClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -266,7 +334,7 @@ function Sidebar({
       />
       <div className="mb-2 h-px w-9 bg-[var(--line)]" />
 
-      {games.map((g) => {
+      {orderedGames.map((g) => {
         const on = g.slug === activeSlug;
         return (
           <button
@@ -314,7 +382,62 @@ function Sidebar({
 
 /* ---------- profile banner ---------- */
 
+type SiteProfileData = {
+  displayName: string;
+  alias: string;
+  avatarUrl: string;
+  bio: string;
+  instagramLabel: string;
+  instagramUrl: string;
+  discordLabel: string;
+  discordUrl: string;
+};
+
+// matches the SiteProfile query resolver's own seed values — used as the
+// first-paint fallback so the banner never flashes empty while the real
+// (admin-editable) values load
+const SITE_PROFILE_FALLBACK: SiteProfileData = {
+  displayName: "ITAMI",
+  alias: "NONAME",
+  avatarUrl: "/pfp.png",
+  bio: "Developer, into software, AI, embedded systems, and anime. This is where I keep track of the games I play. Open to friends in any game, just reach out.",
+  instagramLabel: "amekage_itami",
+  instagramUrl: "https://www.instagram.com/amekage_itami/",
+  discordLabel: "username.noname",
+  discordUrl: "https://discord.com/users/username.noname",
+};
+
+let SITE_PROFILE_CACHE: SiteProfileData | null = null;
+
 function ProfileBanner() {
+  const [profile, setProfile] = useState<SiteProfileData>(
+    SITE_PROFILE_CACHE ?? SITE_PROFILE_FALLBACK,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `{ siteProfile { displayName alias avatarUrl bio instagramLabel instagramUrl discordLabel discordUrl } }`,
+      }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const p = j?.data?.siteProfile;
+        if (p) {
+          SITE_PROFILE_CACHE = p;
+          setProfile(p);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div
       className="relative mb-6 flex flex-col gap-6 overflow-hidden rounded-3xl border border-white/10 p-8
@@ -334,8 +457,8 @@ function ProfileBanner() {
         {/* self-hosted profile picture — drop your Discord avatar at /public/pfp.png */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src="/pfp.png"
-          alt="ITAMI"
+          src={profile.avatarUrl}
+          alt={profile.displayName}
           className="h-24 w-24 flex-shrink-0 rounded-[26px] object-cover shadow-lg"
         />
         <div>
@@ -343,12 +466,12 @@ function ProfileBanner() {
             className="text-4xl font-extrabold tracking-tight"
             style={{ color: "var(--banner-text)" }}
           >
-            ITAMI
+            {profile.displayName}
           </div>
           <div className="mt-2 text-sm" style={{ color: "var(--banner-sub)" }}>
             A.K.A.{" "}
             <b className="font-semibold" style={{ color: "var(--banner-b)" }}>
-              NONAME
+              {profile.alias}
             </b>
           </div>
           <div className="mt-3.5 flex gap-6">
@@ -364,27 +487,29 @@ function ProfileBanner() {
           className="text-[13px] leading-relaxed"
           style={{ color: "var(--banner-sub)" }}
         >
-          Developer, into software, AI, embedded systems, and anime. This is
-          where I keep track of the games I play. Open to friends in any game,
-          just reach out.
+          {profile.bio}
         </p>
         <div className="mt-4 flex flex-wrap gap-2.5">
-          <a
-            href="https://www.instagram.com/amekage_itami/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1.5 text-[12px] font-semibold text-[var(--text)] transition hover:border-[var(--accent)]"
-          >
-            <InstagramIcon /> amekage_itami
-          </a>
-          <a
-            href="https://discord.com/users/username.noname"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1.5 text-[12px] font-semibold text-[var(--text)] transition hover:border-[var(--accent)]"
-          >
-            <DiscordIcon /> username.noname
-          </a>
+          {profile.instagramUrl && (
+            <a
+              href={profile.instagramUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1.5 text-[12px] font-semibold text-[var(--text)] transition hover:border-[var(--accent)]"
+            >
+              <InstagramIcon /> {profile.instagramLabel}
+            </a>
+          )}
+          {profile.discordUrl && (
+            <a
+              href={profile.discordUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1.5 text-[12px] font-semibold text-[var(--text)] transition hover:border-[var(--accent)]"
+            >
+              <DiscordIcon /> {profile.discordLabel}
+            </a>
+          )}
         </div>
       </div>
     </div>
@@ -448,9 +573,10 @@ function FolderTabs({
   activeSlug: string;
   onPick: (slug: string) => void;
 }) {
+  const orderedGames = useOrderedGames();
   return (
     <div className="relative z-20 flex gap-1 overflow-x-auto pl-2">
-      {games.map((g) => {
+      {orderedGames.map((g) => {
         const on = g.slug === activeSlug;
         return (
           <button
@@ -1022,7 +1148,7 @@ function CardModal({
               />
               {/* rarity stars bottom-left */}
               <div className="absolute bottom-2 left-2 text-[16px] font-bold text-yellow-300 drop-shadow">
-                {card.rarity === 5 ? "★ BD" : "★".repeat(card.rarity)}
+                {rarityGlyph(card.rarity)}
               </div>
             </div>
 
@@ -1172,7 +1298,7 @@ function CardCell({ c, onClick }: { c: CharacterCard; onClick: () => void }) {
       />
       {/* rarity stars */}
       <div className="absolute left-1 top-1 rounded bg-black/45 px-1 text-[9px] font-bold text-yellow-300">
-        {c.rarity === 5 ? "★BD" : "★".repeat(c.rarity)}
+        {rarityGlyph(c.rarity)}
       </div>
       {/* lock on un-owned */}
       {!c.owned && (
@@ -2753,6 +2879,10 @@ function SummaryCard({
           <GenshinCharactersSection />
         )}
 
+        {game.slug === "anime" && activeSection === "Library" && (
+          <AnimeLibrarySection />
+        )}
+
         {activeSection !== "Summary" &&
           activeSection !== "Cards" &&
           activeSection !== "Music" &&
@@ -2760,7 +2890,8 @@ function SummaryCard({
           activeSection !== "Stamps" &&
           activeSection !== "Kizuna" &&
           activeSection !== "Honors" &&
-          !(game.slug === "genshin" && activeSection === "Characters") && (
+          !(game.slug === "genshin" && activeSection === "Characters") &&
+          !(game.slug === "anime" && activeSection === "Library") && (
             <div className="py-12 text-center text-[var(--muted)]">
               {activeSection} — coming soon
             </div>
@@ -2829,6 +2960,8 @@ function SummaryCard({
                 </h2>
                 <GenshinFavoritesSummary />
               </div>
+            ) : game.slug === "anime" ? (
+              <AnimeSummary />
             ) : (
               <div>
                 <h2 className="mb-3 text-[13px] font-bold uppercase tracking-wider text-[var(--muted)]">

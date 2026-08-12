@@ -1,5 +1,100 @@
 import { createSchema, createYoga } from "graphql-yoga";
+import { GraphQLError } from "graphql";
 import { prisma } from "@/lib/prisma";
+import { maxLevelForRarity, MAX_MASTER_RANK, MAX_SKILL_LEVEL } from "@/app/profile/images";
+
+const MAL_URL_RE = /myanimelist\.net\/(anime|manga)\/(\d+)/;
+
+// AniList (graphql.anilist.co) mirrors public anime/manga metadata via a
+// proper GraphQL API — swapped in after Jikan (a MAL-scraping proxy) proved
+// unreliable for anything but the most popular titles (verified live: Jikan
+// failed repeatedly on a real title even after 6 retries over 15s, while
+// AniList served it instantly). Looked up by idMal so MAL URLs/ids still
+// work as the primary key — Dex never syncs an actual MAL/AniList account,
+// this is only ever a one-time metadata pull at add-time.
+const ANILIST_URL = "https://graphql.anilist.co";
+
+type AniListMedia = {
+  idMal: number | null;
+  title: { romaji: string; english: string | null };
+  format: string | null;
+  description: string | null;
+  coverImage: { large: string | null; medium: string | null };
+};
+
+async function anilistQuery<T>(
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(ANILIST_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, variables }),
+  });
+  const json = await res.json();
+  if (!res.ok || json.errors) {
+    throw new Error(json.errors?.[0]?.message ?? `AniList returned ${res.status}`);
+  }
+  return json.data;
+}
+
+async function fetchAniListByMalId(kind: "anime" | "manga", malId: number) {
+  const data = await anilistQuery<{ Media: AniListMedia | null }>(
+    `query($idMal:Int,$type:MediaType){ Media(idMal:$idMal, type:$type){ idMal title{romaji english} format description coverImage{large medium} } }`,
+    { idMal: malId, type: kind.toUpperCase() },
+  );
+  if (!data.Media) throw new Error("That title wasn't found.");
+  return data.Media;
+}
+
+async function searchAniList(kind: "anime" | "manga", query: string) {
+  const data = await anilistQuery<{ Page: { media: AniListMedia[] } }>(
+    `query($search:String,$type:MediaType){ Page(perPage:12){ media(search:$search, type:$type, sort:SEARCH_MATCH){ idMal title{romaji english} format coverImage{medium} } } }`,
+    { search: query, type: kind.toUpperCase() },
+  );
+  return data.Page.media.filter((m) => m.idMal != null);
+}
+
+function anilistMediaType(kind: "anime" | "manga", format: string | null): string {
+  if (kind === "anime") return "Anime";
+  return format === "NOVEL" ? "Light Novel" : "Manga";
+}
+
+function anilistTitle(m: AniListMedia): string {
+  return m.title.english ?? m.title.romaji;
+}
+
+function stripHtml(html: string | null): string | null {
+  return html ? html.replace(/<[^>]+>/g, "").trim() : null;
+}
+
+// shared by the URL-paste flow and the search-result-click flow
+async function upsertAnimeFromAniList(kind: "anime" | "manga", malId: number) {
+  const media = await fetchAniListByMalId(kind, malId);
+  const mediaType = anilistMediaType(kind, media.format);
+  const image = media.coverImage.large ?? media.coverImage.medium ?? "";
+
+  const entry = await prisma.animeEntry.upsert({
+    where: { id: malId },
+    update: {
+      title: anilistTitle(media),
+      image,
+      synopsis: stripHtml(media.description),
+      url: `https://myanimelist.net/${kind}/${malId}`,
+      mediaType,
+    },
+    create: {
+      id: malId,
+      title: anilistTitle(media),
+      image,
+      synopsis: stripHtml(media.description),
+      url: `https://myanimelist.net/${kind}/${malId}`,
+      mediaType,
+      status: "Waitlist",
+    },
+  });
+  return { ...entry, createdAt: String(entry.createdAt.getTime()) };
+}
 
 // resolves which splash art to show for a Genshin character — the default
 // HoYoLAB-synced image, or an owned costume's art if selectedCostumeId
@@ -235,6 +330,20 @@ const { handleRequest } = createYoga({
         adminStats: AdminStats!
         genshinCharacters: [GenshinCharacterItem!]!
         genshinRoster: [GenshinRosterItem!]!
+        animeEntries: [AnimeEntryItem!]!
+        animeSearch(query: String!, kind: String!): [AnimeSearchResult!]!
+        siteProfile: SiteProfileItem!
+        entryOrder: [String!]!
+      }
+      type SiteProfileItem {
+        displayName: String!
+        alias: String!
+        avatarUrl: String!
+        bio: String!
+        instagramLabel: String!
+        instagramUrl: String!
+        discordLabel: String!
+        discordUrl: String!
       }
       type AdminStats {
         characterCount: Int!
@@ -243,6 +352,13 @@ const { handleRequest } = createYoga({
         eventCount: Int!
         stampCount: Int!
         honorCount: Int!
+        genshinCharacterCount: Int!
+        genshinFavoriteCount: Int!
+        animeCount: Int!
+        animeWatchingCount: Int!
+        animeFinishedCount: Int!
+        animeFavoriteCount: Int!
+        animeQueuedCount: Int!
       }
       type GenshinSubstat {
         name: String!
@@ -316,6 +432,26 @@ const { handleRequest } = createYoga({
         costumes: [GenshinCostumeItem!]
         selectedCostumeId: Int
       }
+      type AnimeEntryItem {
+        id: Int!
+        title: String!
+        image: String!
+        synopsis: String
+        url: String!
+        mediaType: String!
+        status: String!
+        isFavorite: Boolean!
+        isQueued: Boolean!
+        queueOrder: Int
+        parentId: Int
+        createdAt: String!
+      }
+      type AnimeSearchResult {
+        malId: Int!
+        title: String!
+        image: String!
+        mediaType: String!
+      }
       type AdminCharacter {
         characterId: Int!
         name: String!
@@ -358,6 +494,25 @@ const { handleRequest } = createYoga({
         setFanHonorLevel(characterId: Int!, level: Int!): FanHonorStatus!
         setGenshinFavorite(characterId: Int!, favorite: Boolean!): GenshinCharacterItem!
         setGenshinCostume(characterId: Int!, costumeId: Int): GenshinCharacterItem!
+        addAnimeEntry(url: String!): AnimeEntryItem!
+        addAnimeEntryById(malId: Int!, kind: String!): AnimeEntryItem!
+        setAnimeStatus(id: Int!, status: String!): AnimeEntryItem!
+        setAnimeFavorite(id: Int!, favorite: Boolean!): AnimeEntryItem!
+        setAnimeQueued(id: Int!, queued: Boolean!): AnimeEntryItem!
+        setAnimeQueueOrder(orderedIds: [Int!]!): Boolean!
+        setAnimeParent(id: Int!, parentId: Int): AnimeEntryItem!
+        deleteAnimeEntry(id: Int!): Boolean!
+        setSiteProfile(
+          displayName: String!
+          alias: String!
+          avatarUrl: String!
+          bio: String!
+          instagramLabel: String!
+          instagramUrl: String!
+          discordLabel: String!
+          discordUrl: String!
+        ): SiteProfileItem!
+        setEntryOrder(orderedSlugs: [String!]!): Boolean!
       }
     `,
     resolvers: {
@@ -837,6 +992,13 @@ const { handleRequest } = createYoga({
             eventCount,
             stampCount,
             honorCount,
+            genshinCharacterCount,
+            genshinFavoriteCount,
+            animeCount,
+            animeWatchingCount,
+            animeFinishedCount,
+            animeFavoriteCount,
+            animeQueuedCount,
           ] = await Promise.all([
             prisma.userCharacter.count(),
             prisma.userCard.count(),
@@ -844,6 +1006,13 @@ const { handleRequest } = createYoga({
             prisma.userEvent.count({ where: { rank: { not: null } } }),
             prisma.userStamp.count(),
             prisma.userHonor.count(),
+            prisma.genshinCharacter.count(),
+            prisma.genshinCharacter.count({ where: { isFavorite: true } }),
+            prisma.animeEntry.count({ where: { parentId: null } }),
+            prisma.animeEntry.count({ where: { parentId: null, status: "Watching" } }),
+            prisma.animeEntry.count({ where: { parentId: null, status: "Finished" } }),
+            prisma.animeEntry.count({ where: { parentId: null, isFavorite: true } }),
+            prisma.animeEntry.count({ where: { parentId: null, isQueued: true } }),
           ]);
           return {
             characterCount,
@@ -852,6 +1021,13 @@ const { handleRequest } = createYoga({
             eventCount,
             stampCount,
             honorCount,
+            genshinCharacterCount,
+            genshinFavoriteCount,
+            animeCount,
+            animeWatchingCount,
+            animeFinishedCount,
+            animeFavoriteCount,
+            animeQueuedCount,
           };
         },
 
@@ -980,6 +1156,74 @@ const { handleRequest } = createYoga({
           return rows;
         },
 
+        animeEntries: async () => {
+          // manually dragged (queueOrder set) first, in that order; anything
+          // never touched in the admin board falls back to newest-first —
+          // this is the single order every consumer (admin board, frontend
+          // Library grid, Summary) sees, so reordering in admin now actually
+          // changes what you see everywhere else too
+          const rows = await prisma.animeEntry.findMany({
+            orderBy: [{ queueOrder: { sort: "asc", nulls: "last" } }, { createdAt: "desc" }],
+          });
+          return rows.map((r) => ({
+            ...r,
+            createdAt: String(r.createdAt.getTime()),
+          }));
+        },
+
+        animeSearch: async (
+          _: unknown,
+          { query, kind }: { query: string; kind: string },
+        ) => {
+          if (kind !== "anime" && kind !== "manga") {
+            throw new GraphQLError('kind must be "anime" or "manga".');
+          }
+          if (!query.trim()) return [];
+          try {
+            const results = await searchAniList(kind, query.trim());
+            return results.map((m) => ({
+              malId: m.idMal as number,
+              title: anilistTitle(m),
+              image: m.coverImage.medium ?? m.coverImage.large ?? "",
+              mediaType: anilistMediaType(kind, m.format),
+            }));
+          } catch (e) {
+            throw new GraphQLError(
+              `Search failed — try again in a bit. ${(e as Error).message}`,
+            );
+          }
+        },
+
+        siteProfile: async () => {
+          const existing = await prisma.siteProfile.findUnique({ where: { id: 1 } });
+          if (existing) return existing;
+          // first-ever load — seed the row with the site's real current
+          // values so nothing visually changes until someone actually
+          // edits it from the admin Logistics section
+          return prisma.siteProfile.create({
+            data: {
+              id: 1,
+              displayName: "ITAMI",
+              alias: "NONAME",
+              avatarUrl: "/pfp.png",
+              bio: "Developer, into software, AI, embedded systems, and anime. This is where I keep track of the games I play. Open to friends in any game, just reach out.",
+              instagramLabel: "amekage_itami",
+              instagramUrl: "https://www.instagram.com/amekage_itami/",
+              discordLabel: "username.noname",
+              discordUrl: "https://discord.com/users/username.noname",
+            },
+          });
+        },
+        entryOrder: async () => {
+          const rows = await prisma.entryOrder.findMany({ orderBy: { order: "asc" } });
+          const saved = rows.map((r) => r.slug);
+          const fallback = ["sekai", "genshin", "anime"];
+          // append any slug that hasn't been manually ordered yet (new
+          // entries added to games.ts after the admin last touched order)
+          const rest = fallback.filter((slug) => !saved.includes(slug));
+          return [...saved, ...rest];
+        },
+
         bondHonorList: async () => {
           const [bonds, userBonds] = await Promise.all([
             prisma.bondHonor.findMany({ orderBy: { id: "asc" } }),
@@ -1088,21 +1332,29 @@ const { handleRequest } = createYoga({
           });
           // only 3★/4★ cards have a special-training state in-game
           const st = card.rarity >= 3 ? specialTraining : false;
+          // clamp to the rarity-appropriate caps, mirroring the admin UI's
+          // own max inputs — defense in depth against a raw mutation call
+          const maxLevel = maxLevelForRarity(card.rarity);
+          const clampedLevel = level != null ? Math.min(level, maxLevel) : level;
+          const clampedMasterRank =
+            masterRank != null ? Math.min(masterRank, MAX_MASTER_RANK) : masterRank;
+          const clampedSkillLevel =
+            skillLevel != null ? Math.min(skillLevel, MAX_SKILL_LEVEL) : skillLevel;
 
           if (owned) {
             await prisma.userCard.upsert({
               where: { cardId },
               update: {
-                ...(level != null ? { level } : {}),
-                ...(masterRank != null ? { masterRank } : {}),
-                ...(skillLevel != null ? { skillLevel } : {}),
+                ...(clampedLevel != null ? { level: clampedLevel } : {}),
+                ...(clampedMasterRank != null ? { masterRank: clampedMasterRank } : {}),
+                ...(clampedSkillLevel != null ? { skillLevel: clampedSkillLevel } : {}),
                 ...(st != null ? { specialTraining: st } : {}),
               },
               create: {
                 cardId,
-                level: level ?? 1,
-                masterRank: masterRank ?? 0,
-                skillLevel: skillLevel ?? 1,
+                level: Math.min(clampedLevel ?? 1, maxLevel),
+                masterRank: Math.min(clampedMasterRank ?? 0, MAX_MASTER_RANK),
+                skillLevel: Math.min(clampedSkillLevel ?? 1, MAX_SKILL_LEVEL),
                 specialTraining: st ?? false,
               },
             });
@@ -1340,6 +1592,173 @@ const { handleRequest } = createYoga({
               substats: a.substats as { name: string; value: string }[],
             })),
           };
+        },
+
+        addAnimeEntry: async (_: unknown, { url }: { url: string }) => {
+          const match = url.match(MAL_URL_RE);
+          if (!match) {
+            throw new GraphQLError(
+              "That doesn't look like a MyAnimeList anime or manga URL.",
+            );
+          }
+          const kind = match[1] as "anime" | "manga";
+          const malId = Number(match[2]);
+          try {
+            return await upsertAnimeFromAniList(kind, malId);
+          } catch (e) {
+            throw new GraphQLError(
+              `Couldn't fetch that title right now — try again in a bit. ${(e as Error).message}`,
+            );
+          }
+        },
+
+        addAnimeEntryById: async (
+          _: unknown,
+          { malId, kind }: { malId: number; kind: string },
+        ) => {
+          if (kind !== "anime" && kind !== "manga") {
+            throw new GraphQLError('kind must be "anime" or "manga".');
+          }
+          try {
+            return await upsertAnimeFromAniList(kind, malId);
+          } catch (e) {
+            throw new GraphQLError(
+              `Couldn't fetch that title right now — try again in a bit. ${(e as Error).message}`,
+            );
+          }
+        },
+
+        setAnimeStatus: async (
+          _: unknown,
+          { id, status }: { id: number; status: string },
+        ) => {
+          const entry = await prisma.animeEntry.update({
+            where: { id },
+            // leaving Waitlist means it's no longer "up next" — clear the
+            // pin so it can't linger in the Summary's Next in Queue after
+            // you've actually started (or finished) it
+            data: status === "Waitlist" ? { status } : { status, isQueued: false },
+          });
+          return { ...entry, createdAt: String(entry.createdAt.getTime()) };
+        },
+
+        setAnimeFavorite: async (
+          _: unknown,
+          { id, favorite }: { id: number; favorite: boolean },
+        ) => {
+          const entry = await prisma.animeEntry.update({
+            where: { id },
+            data: { isFavorite: favorite },
+          });
+          return { ...entry, createdAt: String(entry.createdAt.getTime()) };
+        },
+
+        setAnimeQueued: async (
+          _: unknown,
+          { id, queued }: { id: number; queued: boolean },
+        ) => {
+          const entry = await prisma.animeEntry.update({
+            where: { id },
+            data: { isQueued: queued },
+          });
+          return { ...entry, createdAt: String(entry.createdAt.getTime()) };
+        },
+
+        setAnimeQueueOrder: async (
+          _: unknown,
+          { orderedIds }: { orderedIds: number[] },
+        ) => {
+          await prisma.$transaction(
+            orderedIds.map((id, i) =>
+              prisma.animeEntry.update({ where: { id }, data: { queueOrder: i } }),
+            ),
+          );
+          return true;
+        },
+
+        setAnimeParent: async (
+          _: unknown,
+          { id, parentId }: { id: number; parentId?: number | null },
+        ) => {
+          // linking a season under a parent seeds its status from whatever
+          // the parent's status is *right now* — a one-time starting
+          // default, not a hard sync. After linking, each season still
+          // tracks its own status independently (e.g. Finished S1,
+          // Watching S2), same as before.
+          let inheritedStatus: string | null = null;
+
+          if (parentId != null) {
+            if (parentId === id) {
+              throw new GraphQLError("A title can't be its own season.");
+            }
+            const parent = await prisma.animeEntry.findUnique({
+              where: { id: parentId },
+              select: { parentId: true, status: true },
+            });
+            if (!parent) {
+              throw new GraphQLError("That parent title doesn't exist.");
+            }
+            // keep it flat — one level of season grouping, no chains
+            if (parent.parentId != null) {
+              throw new GraphQLError(
+                "That title is itself a season of something else — link to its parent instead.",
+              );
+            }
+            const hasSeasons = await prisma.animeEntry.count({
+              where: { parentId: id },
+            });
+            if (hasSeasons > 0) {
+              throw new GraphQLError(
+                "This title already has seasons linked under it — can't also make it a season of something else.",
+              );
+            }
+            inheritedStatus = parent.status;
+          }
+          const entry = await prisma.animeEntry.update({
+            where: { id },
+            data: {
+              parentId: parentId ?? null,
+              ...(inheritedStatus ? { status: inheritedStatus } : {}),
+            },
+          });
+          return { ...entry, createdAt: String(entry.createdAt.getTime()) };
+        },
+
+        deleteAnimeEntry: async (_: unknown, { id }: { id: number }) => {
+          await prisma.animeEntry.delete({ where: { id } }).catch(() => {});
+          return true;
+        },
+
+        setSiteProfile: async (
+          _: unknown,
+          data: {
+            displayName: string;
+            alias: string;
+            avatarUrl: string;
+            bio: string;
+            instagramLabel: string;
+            instagramUrl: string;
+            discordLabel: string;
+            discordUrl: string;
+          },
+        ) => {
+          return prisma.siteProfile.upsert({
+            where: { id: 1 },
+            update: data,
+            create: { id: 1, ...data },
+          });
+        },
+        setEntryOrder: async (_: unknown, { orderedSlugs }: { orderedSlugs: string[] }) => {
+          await prisma.$transaction(
+            orderedSlugs.map((slug, i) =>
+              prisma.entryOrder.upsert({
+                where: { slug },
+                update: { order: i },
+                create: { slug, order: i },
+              }),
+            ),
+          );
+          return true;
         },
       },
     },

@@ -27,6 +27,27 @@ export function cardArtUrl(abn: string, trained: boolean): string {
   return `https://storage.sekai.best/sekai-jp-assets/character/member/${abn}/card_${variant}.webp`;
 }
 
+// Sekai's real master data reserves rarity 5 exclusively for birthday
+// cards (there's no true 5★ card) — everywhere rarity stars render, that
+// case shows a crown instead. Shared so admin and frontend stay in sync.
+export function isBirthdayCard(rarity: number): boolean {
+  return rarity === 5;
+}
+export function rarityGlyph(rarity: number): string {
+  return isBirthdayCard(rarity) ? "👑" : "★".repeat(rarity);
+}
+
+// max level by rarity — birthday cards (rarity 5) share the 4★ cap. Master
+// rank and skill level cap the same regardless of rarity.
+export function maxLevelForRarity(rarity: number): number {
+  if (rarity <= 1) return 20;
+  if (rarity === 2) return 30;
+  if (rarity === 3) return 50;
+  return 60; // 4★ and birthday (rarity 5)
+}
+export const MAX_MASTER_RANK = 5;
+export const MAX_SKILL_LEVEL = 4;
+
 // ── music ───────────────────────────────────────────────────────
 
 export function jacketUrl(assetbundleName: string): string {
