@@ -18,14 +18,6 @@ jobs:
         with:
           node-version: 20
 
-      # pg_dump refuses to dump from a *newer* server than itself, and
-      # Supabase runs Postgres 17 while Ubuntu's default postgresql-client
-      # package is v16 — install the matching major version by name instead
-      # (ubuntu-latest runners already have the PGDG apt repo configured,
-      # which carries specific major-version packages like this).
-      - name: Install postgresql-client-17
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client-17
-
       - name: Dump database
         env:
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
@@ -78,7 +70,19 @@ jobs:
           ") || { echo "::error::Failed to parse DIRECT_URL — see the diagnostic lines above (no secret content is ever printed)"; exit 1; }
           eval "$PARSED"
           STAMP=$(date -u +%Y-%m-%d_%H%M)
-          /usr/lib/postgresql/17/bin/pg_dump --no-owner --no-privileges -f "dex_${STAMP}.sql"
+
+          # Run pg_dump from the official postgres:17 image instead of an
+          # apt-installed client — guarantees an exact version match against
+          # Supabase's server (pg_dump refuses to dump from a server newer
+          # than itself) without depending on which major versions happen to
+          # be available/pinnable through apt on a given runner image (hit
+          # both "wrong default version" and "specific version not found"
+          # trying that route). ubuntu-latest runners have Docker
+          # pre-installed, so this needs no extra setup step.
+          docker run --rm \
+            -e PGHOST -e PGPORT -e PGUSER -e PGPASSWORD -e PGDATABASE \
+            postgres:17 \
+            pg_dump --no-owner --no-privileges > "dex_${STAMP}.sql"
           echo "DUMP_FILE=dex_${STAMP}.sql" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
