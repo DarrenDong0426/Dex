@@ -17,7 +17,7 @@
 
 import { useState, useEffect } from "react";
 
-type AnimeEntry = {
+export type AnimeEntry = {
   id: number;
   title: string;
   image: string;
@@ -33,10 +33,13 @@ type AnimeEntry = {
 let ANIME_SUMMARY_CACHE: AnimeEntry[] | null = null;
 
 // most "active" wins when rolling a franchise's seasons/movies up into one
-// effective status for its parent
-const STATUS_PRIORITY = ["Watching", "Caught Up", "Waitlist", "Finished"];
+// effective status for its parent. Exported so ProfileClient's header stat
+// row (quickStats) counts by the same rolled-up status this component's
+// three columns use — otherwise the two could disagree on what counts as
+// e.g. "Watching" for a franchise with mixed-status seasons.
+export const STATUS_PRIORITY = ["Watching", "Caught Up", "Waitlist", "Finished"];
 
-function effectiveStatus(entry: AnimeEntry, seasons: AnimeEntry[]): string {
+export function effectiveStatus(entry: AnimeEntry, seasons: AnimeEntry[]): string {
   if (seasons.length === 0) return entry.status;
   const statuses = new Set(seasons.map((s) => s.status));
   for (const s of STATUS_PRIORITY) {

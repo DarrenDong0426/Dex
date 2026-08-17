@@ -11,7 +11,10 @@ import GenshinCharactersSection from "@/app/profile/GenshinCharactersSection";
 import GenshinGearSection from "@/app/profile/GenshinGearSection";
 import GenshinFavoritesSummary from "@/app/profile/GenshinFavoritesSummary";
 import AnimeLibrarySection from "@/app/profile/AnimeLibrarySection";
-import AnimeSummary from "@/app/profile/AnimeSummary";
+import AnimeSummary, {
+  effectiveStatus,
+  type AnimeEntry,
+} from "@/app/profile/AnimeSummary";
 import ClashRoyaleSection from "@/app/profile/ClashRoyaleSection";
 import BrawlStarsSection from "@/app/profile/BrawlStarsSection";
 import { rarityGlyph } from "@/app/profile/images";
@@ -130,6 +133,10 @@ export default function ProfileClient({
   const [activeSlug, setActiveSlug] = useState(games[0].slug);
   const [activeSection, setActiveSection] = useState("Summary");
   const [mode, setMode] = useThemeMode();
+  // sidebar is an always-visible icon rail on desktop; on mobile it's an
+  // off-canvas panel toggled by a hamburger button (see Sidebar below).
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const animeStats = useAnimeStats();
 
   const active = games.find((g) => g.slug === activeSlug) ?? games[0];
   const vars = themes[active.slug][mode] as React.CSSProperties;
@@ -141,6 +148,7 @@ export default function ProfileClient({
     const game = games.find((g) => g.slug === slug) ?? games[0];
     setActiveSlug(slug);
     setActiveSection(tabsFor(game)[0]);
+    setSidebarOpen(false);
   }
 
   // apply a deep link once mounted client-side
@@ -202,6 +210,17 @@ export default function ProfileClient({
         },
       ],
     };
+  } else if (active.slug === "anime" && animeStats) {
+    display = {
+      ...active,
+      hero: { value: String(animeStats.finished), label: "completed" },
+      quickStats: [
+        { value: String(animeStats.watching), label: "watching" },
+        { value: String(animeStats.caughtUp), label: "caught up" },
+        { value: String(animeStats.waitlist), label: "waitlist" },
+        { value: String(animeStats.finished), label: "finished" },
+      ],
+    };
   }
 
   const lastUpdated =
@@ -227,12 +246,43 @@ export default function ProfileClient({
     >
       <BackgroundFX mode={mode} />
 
+      {/* mobile-only dim backdrop behind the open off-canvas sidebar; tap
+          anywhere on it to close, same as tapping outside a dropdown */}
+      {sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-20 bg-black/50 md:hidden"
+        />
+      )}
+
       <Sidebar
         activeSlug={activeSlug}
         onPick={pickGame}
         mode={mode}
         onToggleMode={() => setMode(mode === "dark" ? "light" : "dark")}
+        open={sidebarOpen}
       />
+
+      {/* floats over the page and stays put as you scroll (fixed, not part
+          of the scrolling content) — previously this sat inline at the top
+          of the page, so it scrolled away with the rest of the content and
+          was unreachable without scrolling back up on a long section like
+          Cards or Honors. Hidden while the sidebar itself is open (that
+          corner of the screen is occupied by the sidebar then, and tapping
+          the backdrop already closes it). */}
+      {!sidebarOpen && (
+        <button
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open menu"
+          className="fixed left-4 top-4 z-40 flex h-10 w-10 items-center justify-center gap-1 rounded-xl border border-[var(--line)] bg-[var(--panel)] shadow-lg md:hidden"
+        >
+          <span className="flex flex-col gap-[3px]">
+            <span className="h-0.5 w-5 rounded bg-[var(--text)]" />
+            <span className="h-0.5 w-5 rounded bg-[var(--text)]" />
+            <span className="h-0.5 w-5 rounded bg-[var(--text)]" />
+          </span>
+        </button>
+      )}
 
       <div className="relative z-10 min-w-0 flex-1">
         <div className="mx-auto max-w-[1080px] p-6">
@@ -297,6 +347,76 @@ function useOrderedGames(): Game[] {
   return ordered;
 }
 
+/* ---------- anime header stats (hero + quickStats) ---------- */
+
+// counts by the same rolled-up effectiveStatus AnimeSummary's three columns
+// use, so the header numbers never disagree with what's actually listed
+// below them. Self-fetching + module-cached like useOrderedGames above,
+// rather than prop-drilled from AnimeSummary's own fetch.
+type AnimeStats = {
+  watching: number;
+  caughtUp: number;
+  waitlist: number;
+  finished: number;
+};
+
+let ANIME_STATS_CACHE: AnimeStats | null = null;
+
+function countAnimeStats(entries: AnimeEntry[]): AnimeStats {
+  const anime = entries.filter((e) => e.mediaType === "Anime");
+  const topLevel = anime.filter((e) => e.parentId == null);
+  const seasonsOf = (id: number) => anime.filter((e) => e.parentId === id);
+  const counts: AnimeStats = { watching: 0, caughtUp: 0, waitlist: 0, finished: 0 };
+  for (const e of topLevel) {
+    switch (effectiveStatus(e, seasonsOf(e.id))) {
+      case "Watching":
+        counts.watching++;
+        break;
+      case "Caught Up":
+        counts.caughtUp++;
+        break;
+      case "Waitlist":
+        counts.waitlist++;
+        break;
+      case "Finished":
+        counts.finished++;
+        break;
+    }
+  }
+  return counts;
+}
+
+function useAnimeStats(): AnimeStats | null {
+  const [stats, setStats] = useState<AnimeStats | null>(ANIME_STATS_CACHE);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/graphql", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: `{ animeEntries { id mediaType status parentId } }`,
+      }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const list = j?.data?.animeEntries;
+        if (Array.isArray(list)) {
+          const counted = countAnimeStats(list);
+          ANIME_STATS_CACHE = counted;
+          setStats(counted);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return stats;
+}
+
 /* ---------- full-height sidebar ---------- */
 
 function Sidebar({
@@ -304,11 +424,15 @@ function Sidebar({
   onPick,
   mode,
   onToggleMode,
+  open,
 }: {
   activeSlug: string;
   onPick: (slug: string) => void;
   mode: Mode;
   onToggleMode: () => void;
+  // mobile-only: whether the off-canvas panel is slid into view. Ignored
+  // above the md breakpoint, where the sidebar is always a static rail.
+  open: boolean;
 }) {
   const router = useRouter();
   const orderedGames = useOrderedGames();
@@ -330,7 +454,10 @@ function Sidebar({
   }
 
   return (
-    <div className="sticky top-0 z-20 flex h-screen w-[84px] flex-shrink-0 flex-col items-center gap-3 border-r border-[var(--line)] bg-[var(--panel)] py-5 transition-colors duration-500">
+    <div
+      className={`fixed inset-y-0 left-0 z-30 flex h-screen w-[84px] flex-shrink-0 flex-col items-center gap-3 border-r border-[var(--line)] bg-[var(--panel)] py-5 transition-transform duration-300 md:sticky md:top-0 md:translate-x-0 md:transition-colors md:duration-500
+                  ${open ? "translate-x-0" : "-translate-x-full"}`}
+    >
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src="/pfp.png"
@@ -581,7 +708,10 @@ function FolderTabs({
 }) {
   const orderedGames = useOrderedGames();
   return (
-    <div className="relative z-20 flex gap-1 overflow-x-auto pl-2">
+    <div
+      className="relative z-20 flex gap-1 overflow-x-auto pl-2"
+      style={{ touchAction: "pan-x" }}
+    >
       {orderedGames.map((g) => {
         const on = g.slug === activeSlug;
         return (
@@ -1382,6 +1512,11 @@ function CardBinder({
   const [sort, setSort] = useState<SortMode>("rarity");
   const [flip, setFlip] = useState<null | "next" | "prev">(null);
   const [selectedCard, setSelectedCard] = useState<CharacterCard | null>(null);
+  // mobile: two facing pages side by side doesn't fit a phone's width, so
+  // below sm it shows one page at a time instead — tracked separately from
+  // `spread` (which pairs pages up) rather than reusing it, so the desktop
+  // two-page flip animation stays completely untouched.
+  const [mobilePage, setMobilePage] = useState(0);
 
   // fetch this character's full card list
   useEffect(() => {
@@ -1427,6 +1562,12 @@ function CardBinder({
   const ownedCount = sorted.filter((c) => c.owned).length;
   const spreadCount = Math.max(1, Math.ceil(sorted.length / PER_SPREAD));
   const safeSpread = Math.min(spread, spreadCount - 1);
+  const pageCount = Math.max(1, Math.ceil(sorted.length / PER_PAGE));
+  const safeMobilePage = Math.min(mobilePage, pageCount - 1);
+  const mobileCards = sorted.slice(
+    safeMobilePage * PER_PAGE,
+    safeMobilePage * PER_PAGE + PER_PAGE,
+  );
   const spreadCards = sorted.slice(
     safeSpread * PER_SPREAD,
     safeSpread * PER_SPREAD + PER_SPREAD,
@@ -1489,6 +1630,7 @@ function CardBinder({
               onClick={() => {
                 setSort(m);
                 setSpread(0);
+                setMobilePage(0);
               }}
               className="rounded-full px-2.5 py-0.5 transition"
               style={{
@@ -1511,53 +1653,89 @@ function CardBinder({
         <div className="py-12 text-center text-[var(--muted)]">Loading…</div>
       ) : (
         <>
-          {/* book spread — two facing pages with a 3D page-turn */}
-          <div
-            className="relative flex gap-3 rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-3"
-            style={{ perspective: "2000px" }}
-          >
-            <BinderPage cards={leftCards} onPick={setSelectedCard} />
-            <BinderPage cards={rightCards} onPick={setSelectedCard} />
+          {/* desktop/tablet: book spread — two facing pages with a 3D
+              page-turn. Two full pages side by side needs real width, so
+              this whole block is sm+ only (see the mobile single-page
+              block right below for under-sm). */}
+          <div className="hidden sm:block">
+            <div
+              className="relative flex gap-3 rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-3"
+              style={{ perspective: "2000px" }}
+            >
+              <BinderPage cards={leftCards} onPick={setSelectedCard} />
+              <BinderPage cards={rightCards} onPick={setSelectedCard} />
 
-            {/* flipping page overlay: covers the right (next) or left (prev) half */}
-            {flip && (
-              <div
-                className="pointer-events-none absolute inset-y-3 rounded-xl bg-[var(--panel-2)]"
-                style={{
-                  left: flip === "next" ? "50%" : "0.75rem",
-                  right: flip === "next" ? "0.75rem" : "50%",
-                  transformOrigin:
-                    flip === "next" ? "left center" : "right center",
-                  animation: `${flip === "next" ? "pageNext" : "pagePrev"} 0.45s ease-in-out forwards`,
-                  backfaceVisibility: "hidden",
-                  boxShadow: "0 10px 30px -8px rgba(0,0,0,0.5)",
-                }}
-              />
+              {/* flipping page overlay: covers the right (next) or left (prev) half */}
+              {flip && (
+                <div
+                  className="pointer-events-none absolute inset-y-3 rounded-xl bg-[var(--panel-2)]"
+                  style={{
+                    left: flip === "next" ? "50%" : "0.75rem",
+                    right: flip === "next" ? "0.75rem" : "50%",
+                    transformOrigin:
+                      flip === "next" ? "left center" : "right center",
+                    animation: `${flip === "next" ? "pageNext" : "pagePrev"} 0.45s ease-in-out forwards`,
+                    backfaceVisibility: "hidden",
+                    boxShadow: "0 10px 30px -8px rgba(0,0,0,0.5)",
+                  }}
+                />
+              )}
+            </div>
+
+            {/* pager */}
+            {spreadCount > 1 && (
+              <div className="mt-4 flex items-center justify-center gap-4">
+                <button
+                  onClick={() => go("prev")}
+                  disabled={safeSpread === 0 || !!flip}
+                  className="rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1 text-[13px] font-bold text-[var(--text)] disabled:opacity-40"
+                >
+                  ←
+                </button>
+                <span className="text-[12px] font-semibold text-[var(--muted)]">
+                  {safeSpread + 1} / {spreadCount}
+                </span>
+                <button
+                  onClick={() => go("next")}
+                  disabled={safeSpread === spreadCount - 1 || !!flip}
+                  className="rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1 text-[13px] font-bold text-[var(--text)] disabled:opacity-40"
+                >
+                  →
+                </button>
+              </div>
             )}
           </div>
 
-          {/* pager */}
-          {spreadCount > 1 && (
-            <div className="flex items-center justify-center gap-4">
-              <button
-                onClick={() => go("prev")}
-                disabled={safeSpread === 0 || !!flip}
-                className="rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1 text-[13px] font-bold text-[var(--text)] disabled:opacity-40"
-              >
-                ←
-              </button>
-              <span className="text-[12px] font-semibold text-[var(--muted)]">
-                {safeSpread + 1} / {spreadCount}
-              </span>
-              <button
-                onClick={() => go("next")}
-                disabled={safeSpread === spreadCount - 1 || !!flip}
-                className="rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1 text-[13px] font-bold text-[var(--text)] disabled:opacity-40"
-              >
-                →
-              </button>
+          {/* mobile: one page at a time, no flip animation — a two-page
+              spread doesn't fit a phone's width */}
+          <div className="sm:hidden">
+            <div className="rounded-2xl border border-[var(--line)] bg-[var(--panel)] p-3">
+              <BinderPage cards={mobileCards} onPick={setSelectedCard} />
             </div>
-          )}
+            {pageCount > 1 && (
+              <div className="mt-4 flex items-center justify-center gap-4">
+                <button
+                  onClick={() => setMobilePage((p) => Math.max(0, p - 1))}
+                  disabled={safeMobilePage === 0}
+                  className="rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1 text-[13px] font-bold text-[var(--text)] disabled:opacity-40"
+                >
+                  ←
+                </button>
+                <span className="text-[12px] font-semibold text-[var(--muted)]">
+                  {safeMobilePage + 1} / {pageCount}
+                </span>
+                <button
+                  onClick={() =>
+                    setMobilePage((p) => Math.min(pageCount - 1, p + 1))
+                  }
+                  disabled={safeMobilePage === pageCount - 1}
+                  className="rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-3 py-1 text-[13px] font-bold text-[var(--text)] disabled:opacity-40"
+                >
+                  →
+                </button>
+              </div>
+            )}
+          </div>
 
           <style>{`
             @keyframes pageNext {
@@ -1601,16 +1779,17 @@ function CardsSection({ characters }: { characters: CharacterSummary[] }) {
   }
 
   return (
-    <div className="flex gap-4">
-      {/* unit rail */}
-      <div className="flex w-[150px] flex-shrink-0 flex-col gap-2">
+    <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
+      {/* unit rail — horizontal scrollable row on mobile (a fixed 150px
+          vertical column doesn't fit a phone), vertical column from sm up */}
+      <div className="event-scroll flex w-full flex-shrink-0 gap-2 overflow-x-auto sm:w-[150px] sm:flex-col sm:overflow-visible">
         {UNIT_ORDER.map((u) => {
           const on = u === activeUnit;
           return (
             <button
               key={u}
               onClick={() => setActiveUnit(u)}
-              className="flex items-center justify-center rounded-xl border px-3 py-3 transition"
+              className="flex w-16 flex-shrink-0 items-center justify-center rounded-xl border px-3 py-3 transition sm:w-full"
               style={{
                 background: on ? "var(--panel-2)" : "var(--panel)",
                 borderColor: on
@@ -1633,14 +1812,16 @@ function CardsSection({ characters }: { characters: CharacterSummary[] }) {
         })}
       </div>
 
-      {/* character standing-art cards — same size for all units, spread evenly */}
-      <div className="flex min-w-0 flex-1 justify-between gap-3">
+      {/* character standing-art cards — a wrapping grid on mobile (an even
+          flex spread crushes 4-6 cards into a phone's width), the original
+          flex row spread from sm up */}
+      <div className="grid grid-cols-3 gap-3 sm:flex sm:min-w-0 sm:flex-1 sm:justify-between">
         {unitChars.map((c) => {
           return (
             <button
               key={c.characterId}
               onClick={() => setActiveChar(c)}
-              className="group relative flex aspect-[2/3] max-w-[180px] flex-1 overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] transition hover:border-[var(--accent)]"
+              className="group relative flex aspect-[2/3] overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] transition hover:border-[var(--accent)] sm:max-w-[180px] sm:flex-1"
               title={c.name}
             >
               {/* standing art — full image visible, name already baked in */}
@@ -1700,7 +1881,7 @@ function LevelPip({
     "linear-gradient(135deg, #ff5f6d, #ffc371, #47e5bc, #4a9de0, #9b5ad6)";
   return (
     <span
-      className="inline-flex h-9 w-9 flex-shrink-0 rotate-45 items-center justify-center rounded-[5px] text-[14px] font-extrabold"
+      className="inline-flex h-8 w-8 flex-shrink-0 rotate-45 items-center justify-center rounded-[5px] text-[13px] font-extrabold sm:h-9 sm:w-9 sm:text-[14px]"
       style={{
         background: isFP ? rainbow : filled ? color : "transparent",
         border: `2px solid ${isFP ? "transparent" : (color ?? "var(--line)")}`,
@@ -1738,35 +1919,46 @@ const MUSIC_RAIL: { tag: string; label: string; logo?: string }[] = [
 // session cache so re-opening the Music tab doesn't refetch the whole catalog
 let MUSIC_CACHE: MusicSong[] | null = null;
 
-const ROW_H = 104; // fixed row height incl. gap, for virtualization
+const ROW_H = 136; // fixed row height incl. gap, for virtualization
 
 function MusicRow({ s }: { s: MusicSong }) {
   const byDiff = new Map(s.results.map((r) => [r.difficulty, r]));
   return (
-    <div className="flex items-center gap-4 rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] p-3 transition hover:border-[var(--accent)]">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={jacketUrl(s.assetbundleName)}
-        alt={s.title}
-        className="h-20 w-20 flex-shrink-0 rounded-xl bg-[var(--panel)] object-cover"
-        loading="lazy"
-        onError={(e) => {
-          e.currentTarget.style.visibility = "hidden";
-        }}
-      />
-      <div className="flex min-w-0 flex-1 flex-col justify-center gap-2">
-        <div className="truncate text-[17px] font-bold text-[var(--text)]">
+    <div className="flex flex-col gap-2 rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] p-3 transition hover:border-[var(--accent)]">
+      {/* jacket + title on their own row — freeing the pips row below to
+          use the row's FULL width (not squeezed beside an 80px jacket)
+          means all 4-6 difficulty pips fit on one line without scrolling
+          on essentially any phone width, instead of just 2-3 */}
+      <div className="flex items-center gap-3">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={jacketUrl(s.assetbundleName)}
+          alt={s.title}
+          className="h-14 w-14 flex-shrink-0 rounded-xl bg-[var(--panel)] object-cover"
+          loading="lazy"
+          onError={(e) => {
+            e.currentTarget.style.visibility = "hidden";
+          }}
+        />
+        <div className="min-w-0 flex-1 truncate text-[17px] font-bold text-[var(--text)]">
           {s.title}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {DIFFICULTY_ORDER.map((d) => {
-            const r = byDiff.get(d);
-            if (!r) return null;
-            return (
-              <LevelPip key={d} level={r.playLevel} result={r.playResult} />
-            );
-          })}
-        </div>
+      </div>
+      {/* the list above this is virtualized with a FIXED per-row pixel
+          height (ROW_H) for scroll-position math, so this row's real
+          height needs to stay fixed no matter how many difficulties a song
+          has. event-scroll/overflow-x-auto is a fallback for the rare
+          6-difficulty (APPEND) song on the narrowest phones — the sizing
+          above is chosen so the common 4-5-difficulty case always fits on
+          one line without actually needing to scroll. */}
+      <div className="event-scroll flex flex-nowrap gap-1.5 overflow-x-auto">
+        {DIFFICULTY_ORDER.map((d) => {
+          const r = byDiff.get(d);
+          if (!r) return null;
+          return (
+            <LevelPip key={d} level={r.playLevel} result={r.playResult} />
+          );
+        })}
       </div>
     </div>
   );
@@ -1865,7 +2057,7 @@ function MusicSection() {
           placeholder="Search by song title"
           className="min-w-[180px] flex-1 rounded-full border border-[var(--line)] bg-[var(--panel-2)] px-4 py-2 text-[13px] text-[var(--text)] outline-none focus:border-[var(--accent)]"
         />
-        <div className="inline-flex rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
+        <div className="event-scroll inline-flex max-w-full overflow-x-auto rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
           {(
             [
               ["all", "All"],
@@ -1878,7 +2070,7 @@ function MusicSection() {
             <button
               key={v}
               onClick={() => setStatus(v)}
-              className="rounded-full px-2.5 py-1 transition"
+              className="flex-shrink-0 rounded-full px-2.5 py-1 transition"
               style={{
                 background: status === v ? "var(--accent)" : "transparent",
                 color: status === v ? "#0c0a1e" : "var(--muted)",
@@ -1890,12 +2082,12 @@ function MusicSection() {
         </div>
 
         {/* difficulty selector */}
-        <div className="inline-flex rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
+        <div className="event-scroll inline-flex max-w-full overflow-x-auto rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
           {["all", ...DIFFICULTY_ORDER].map((d) => (
             <button
               key={d}
               onClick={() => setDiffFilter(d)}
-              className="rounded-full px-2.5 py-1 transition"
+              className="flex-shrink-0 rounded-full px-2.5 py-1 transition"
               style={{
                 background:
                   diffFilter === d
@@ -1917,9 +2109,11 @@ function MusicSection() {
       </div>
 
       {/* rail (centered) + song list */}
-      <div className="flex items-center gap-4">
-        {/* unit/tag rail — vertically centered */}
-        <div className="flex w-[130px] flex-shrink-0 flex-col gap-2 self-center">
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center sm:gap-4">
+        {/* unit/tag rail — horizontal scrollable row on mobile (a fixed
+            130px column leaves almost no width for the song rows'
+            jacket+title+pips on a phone), vertical column from sm up */}
+        <div className="event-scroll flex w-full flex-shrink-0 gap-2 overflow-x-auto sm:w-[130px] sm:flex-col sm:self-center sm:overflow-visible">
           {MUSIC_RAIL.map((r) => {
             const on = r.tag === activeTag;
             const color = r.logo
@@ -1929,7 +2123,7 @@ function MusicSection() {
               <button
                 key={r.tag}
                 onClick={() => setActiveTag(r.tag)}
-                className="flex h-11 items-center justify-center rounded-xl border px-2 transition"
+                className="flex h-11 w-16 flex-shrink-0 items-center justify-center rounded-xl border px-2 transition sm:w-full"
                 style={{
                   background: on ? "var(--panel-2)" : "var(--panel)",
                   borderColor: on ? color : "var(--line)",
@@ -2134,7 +2328,7 @@ function EventsSection() {
           <img
             src={eventBgUrl(hovered.assetbundleName)}
             alt=""
-            className="absolute inset-y-0 right-0 h-full w-[55%] object-cover opacity-90 transition-opacity duration-500"
+            className="absolute inset-y-0 right-0 h-full w-[55%] object-cover opacity-30 transition-opacity duration-500 sm:opacity-90"
             style={{
               objectPosition:
                 hovered.eventType === "world_bloom" ? "0% center" : "center",
@@ -2169,9 +2363,11 @@ function EventsSection() {
         </div>
       )}
 
-      <div className="relative z-20 flex gap-4 p-2">
-        {/* unit rail */}
-        <div className="flex w-[120px] flex-shrink-0 flex-col gap-2 self-center">
+      <div className="relative z-20 flex flex-col gap-3 p-2 sm:flex-row sm:gap-4">
+        {/* unit rail — a horizontal scrollable row on mobile (doesn't fit a
+            fixed 120px vertical column at phone width), the original
+            vertical column from sm up */}
+        <div className="event-scroll flex w-full flex-shrink-0 gap-2 overflow-x-auto sm:w-[120px] sm:flex-col sm:self-center sm:overflow-visible">
           {EVENT_RAIL.map((r) => {
             const on = r.key === activeUnit;
             const color = r.logo
@@ -2181,7 +2377,7 @@ function EventsSection() {
               <button
                 key={r.key}
                 onClick={() => setActiveUnit(r.key)}
-                className="flex h-11 items-center justify-center rounded-xl border px-2 transition"
+                className="flex h-11 w-16 flex-shrink-0 items-center justify-center rounded-xl border px-2 transition sm:w-full"
                 style={{
                   background: on ? "var(--panel-2)" : "var(--panel)",
                   borderColor: on ? color : "var(--line)",
@@ -2207,8 +2403,9 @@ function EventsSection() {
           })}
         </div>
 
-        {/* event banner list — fixed-width column, doesn't stretch right */}
-        <div className="event-scroll flex max-h-[540px] w-[340px] flex-shrink-0 flex-col gap-3 overflow-y-auto pr-1">
+        {/* event banner list — fixed-width column on sm+ (doesn't stretch
+            right), full width on mobile where it's stacked below the rail */}
+        <div className="event-scroll flex max-h-[540px] w-full flex-shrink-0 flex-col gap-3 overflow-y-auto pr-1 sm:w-[340px]">
           {filtered.map((e) => (
             <button
               key={e.id}
@@ -2243,11 +2440,6 @@ function EventsSection() {
           )}
         </div>
       </div>
-
-      <style>{`
-        .event-scroll { scrollbar-width: none; -ms-overflow-style: none; }
-        .event-scroll::-webkit-scrollbar { display: none; }
-      `}</style>
     </div>
   );
 }

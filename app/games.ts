@@ -239,7 +239,7 @@ export const games: Game[] = [
     kind: "game",
     logo: "PS",
     logoBg: SEKAI_RAINBOW,
-    logoSrc: "/logos/sekai.png",
+    logoSrc: "/logos/sekai.webp",
     info: [
       { value: "Itami", label: "username" },
       { value: "#8821 4471 90", label: "game ID" },
@@ -293,16 +293,19 @@ export const games: Game[] = [
     kind: "anime",
     logo: "AN",
     logoBg: ANIME_VIOLET,
-    logoSrc: "/logos/anime.png",
+    logoSrc: "/logos/anime.webp",
     info: [],
-    // hero + quickStats are placeholders; wired to real counts when the
-    // Anime table + resolver land (total watched / watching / favorites).
+    // hero + quickStats here are the pre-data fallback (SSR default before
+    // the client-side animeEntries fetch resolves) — ProfileClient.tsx
+    // overrides both with real counts (by rolled-up effectiveStatus) once
+    // loaded. Values mirror the 4 real AnimeEntry statuses 1:1 — there's no
+    // "dropped" status in the data model, so quickStats doesn't invent one.
     hero: { value: "0", label: "completed" },
     quickStats: [
       { value: "0", label: "watching" },
-      { value: "0", label: "completed" },
-      { value: "0", label: "dropped" },
-      { value: "0", label: "favorites" },
+      { value: "0", label: "caught up" },
+      { value: "0", label: "waitlist" },
+      { value: "0", label: "finished" },
     ],
     // anime is one hub list — a single "Library" section (plus Creations for
     // anime-themed things Darren makes). No per-title sub-pages.

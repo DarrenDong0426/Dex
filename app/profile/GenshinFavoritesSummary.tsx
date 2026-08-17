@@ -228,10 +228,10 @@ function FavoriteCard({
       className="max-h-[85vh] overflow-auto rounded-2xl border shadow-2xl"
       style={{ borderColor: elColor, background: "var(--panel-2)" }}
     >
-      <div className="flex flex-row">
+      <div className="flex flex-col sm:flex-row">
         {/* splash art thumbnail + name/level/constellation overlay */}
         <div
-          className="relative w-[220px] flex-shrink-0 overflow-hidden"
+          className="relative flex-shrink-0 overflow-hidden sm:w-[220px]"
           style={{
             background: `linear-gradient(160deg, ${elColor}33, var(--panel-2))`,
           }}
@@ -241,6 +241,7 @@ function FavoriteCard({
             src={c.image}
             alt={c.name}
             className="h-full w-full object-cover object-top"
+            style={{ minHeight: 220 }}
           />
           <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2 pt-6">
             <div className="text-xl font-extrabold text-white">{c.name}</div>
@@ -328,7 +329,7 @@ function FavoriteCard({
         </div>
       </div>
 
-      <div className="grid grid-cols-5 gap-2 p-3 pt-0">
+      <div className="grid grid-cols-2 gap-2 p-3 pt-0 sm:grid-cols-5">
         {c.artifacts.map((a) => (
           <div
             key={a.slot}

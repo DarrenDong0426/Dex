@@ -24,3 +24,17 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Hides the scrollbar on horizontally/vertically scrollable rails (mobile
+   unit/event rails, etc.) while keeping them scrollable. Shared here rather
+   than defined per-component with a <style> tag, since a plain (non-scoped)
+   <style> tag's rules only exist in the DOM once that specific component
+   has mounted at least once — relying on that made a second component using
+   the same class name fragile depending on mount order. */
+.event-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.event-scroll::-webkit-scrollbar {
+  display: none;
+}
