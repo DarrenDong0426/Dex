@@ -40,14 +40,37 @@ jobs:
           # with zero PG* vars set, falling back to a local socket that
           # doesn't exist on the runner — a confusing second error masking
           # the real one (also hit this exact failure once).
+          #
+          # Also strips a surrounding quote pair and/or a leading "DIRECT_URL="
+          # in case the secret was pasted straight from the .env line rather
+          # than just the value — both are easy copy mistakes and cheap to
+          # handle automatically instead of erroring and asking for a re-paste.
+          #
+          # On failure, prints ONLY booleans/lengths, never any slice of the
+          # actual value — GitHub's log masking only redacts an exact, whole
+          # match of a registered secret, not fragments, so printing even a
+          # short prefix of a real secret would leak it into the log unmasked.
           PARSED=$(node -e "
-            const u = new URL(process.env.DIRECT_URL.trim());
-            console.log('export PGHOST=' + JSON.stringify(u.hostname));
-            console.log('export PGPORT=' + JSON.stringify(u.port || '5432'));
-            console.log('export PGUSER=' + JSON.stringify(decodeURIComponent(u.username)));
-            console.log('export PGPASSWORD=' + JSON.stringify(decodeURIComponent(u.password)));
-            console.log('export PGDATABASE=' + JSON.stringify(u.pathname.replace(/^\//, '')));
-          ") || { echo "::error::Failed to parse DIRECT_URL — check the secret for a trailing newline or malformed value"; exit 1; }
+            let raw = (process.env.DIRECT_URL || '').trim();
+            raw = raw.replace(/^DIRECT_URL=/, '');
+            raw = raw.replace(/^[\"']|[\"']\$/g, '');
+            try {
+              const u = new URL(raw);
+              console.log('export PGHOST=' + JSON.stringify(u.hostname));
+              console.log('export PGPORT=' + JSON.stringify(u.port || '5432'));
+              console.log('export PGUSER=' + JSON.stringify(decodeURIComponent(u.username)));
+              console.log('export PGPASSWORD=' + JSON.stringify(decodeURIComponent(u.password)));
+              console.log('export PGDATABASE=' + JSON.stringify(u.pathname.replace(/^\//, '')));
+            } catch (e) {
+              console.error('DIRECT_URL failed to parse as a URL.');
+              console.error('  length=' + raw.length);
+              console.error('  startsWithPostgresScheme=' + (raw.startsWith('postgresql://') || raw.startsWith('postgres://')));
+              console.error('  containsNewline=' + raw.includes(String.fromCharCode(10)));
+              console.error('  containsSpace=' + raw.includes(' '));
+              console.error('  containsAtSign=' + raw.includes('@'));
+              process.exit(1);
+            }
+          ") || { echo "::error::Failed to parse DIRECT_URL — see the diagnostic lines above (no secret content is ever printed)"; exit 1; }
           eval "$PARSED"
           STAMP=$(date -u +%Y-%m-%d_%H%M)
           pg_dump --no-owner --no-privileges -f "dex_${STAMP}.sql"
