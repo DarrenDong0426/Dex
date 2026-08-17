@@ -18,8 +18,13 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install postgresql-client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      # pg_dump refuses to dump from a *newer* server than itself, and
+      # Supabase runs Postgres 17 while Ubuntu's default postgresql-client
+      # package is v16 — install the matching major version by name instead
+      # (ubuntu-latest runners already have the PGDG apt repo configured,
+      # which carries specific major-version packages like this).
+      - name: Install postgresql-client-17
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-17
 
       - name: Dump database
         env:
@@ -73,7 +78,7 @@ jobs:
           ") || { echo "::error::Failed to parse DIRECT_URL — see the diagnostic lines above (no secret content is ever printed)"; exit 1; }
           eval "$PARSED"
           STAMP=$(date -u +%Y-%m-%d_%H%M)
-          pg_dump --no-owner --no-privileges -f "dex_${STAMP}.sql"
+          /usr/lib/postgresql/17/bin/pg_dump --no-owner --no-privileges -f "dex_${STAMP}.sql"
           echo "DUMP_FILE=dex_${STAMP}.sql" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
