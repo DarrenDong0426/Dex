@@ -9,9 +9,14 @@ export default defineConfig({
   migrations: {
     path: "prisma/migrations",
   },
-  engine: "classic",
+  // Prisma v7: no more `engine` field (the native Rust engine is gone,
+  // replaced by the WASM query compiler — see the "Query Compiler: enabled"
+  // line in `prisma --version`). `directUrl` is also gone from this block;
+  // CLI/migration tooling now just reads DIRECT_URL directly here, while the
+  // actual app at runtime still uses the pooled DATABASE_URL via the
+  // PrismaPg adapter in lib/prisma.ts — same pooled/direct split as before,
+  // just configured in one place instead of two.
   datasource: {
-    url: env("DATABASE_URL"),
-    directUrl: env("DIRECT_URL"),
+    url: env("DIRECT_URL"),
   },
 });

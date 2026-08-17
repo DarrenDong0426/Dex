@@ -84,6 +84,60 @@ scoped and don't touch working code unless asked.
   makes duplicate case-variants -> "differs only in casing" + stale `.next` cache.
   Fix: rm both, recreate ONE exact-case file, `rm -rf .next`, restart dev + TS
   server. Imports must match filename char-for-char.
+- **`.github/workflows/backup-db.yml` (scheduled DB backup) — three separate
+  failures getting this working, in order**: (1) the `DIRECT_URL` GitHub
+  secret had a trailing newline from copy/paste, which breaks `new URL()` —
+  fixed by `.trim()`-ing before parsing, plus auto-stripping a surrounding
+  quote pair / leading `DIRECT_URL=` in case the whole `.env` line got pasted
+  instead of just the value. (2) A parse failure inside `$(...)` doesn't
+  reliably trigger bash `set -e` — a crash there silently eval'd to nothing,
+  so `pg_dump` ran with zero PG* vars set and failed on an unrelated,
+  confusing "local socket not found" error two steps later. Fixed by
+  capturing to a variable and checking its exit code explicitly. (3) `pg_dump`
+  refuses to dump from a server *newer* than itself — Supabase runs Postgres
+  17, Ubuntu's default `apt-get install postgresql-client` pulls v16.
+  `postgresql-client-17` isn't installable either (PGDG apt repo isn't
+  actually pre-configured on `ubuntu-latest` runners, despite the installed
+  package's version string containing "pgdg24.04" — that's just Ubuntu's own
+  build provenance stamp, not a live repo). Fixed by running pg_dump via
+  `docker run postgres:17` instead of any apt-installed client — guarantees
+  an exact version match, and `ubuntu-latest` runners have Docker
+  pre-installed already, so it needs no extra setup step. If this workflow
+  ever needs touching again, don't rediscover these three from scratch.
+- **First real deploy to Vercel (2026-08-17) surfaced four separate bugs that
+  `next dev` never catches** — all fixed, but worth knowing if deploying
+  again to a fresh project/environment:
+  1. Vercel's own **Deployment Protection** (`ssoProtection`, platform-level,
+     unrelated to Dex's own admin auth) blocks the `*.vercel.app` URL by
+     default until a custom domain is attached — disable via the dashboard
+     or `PATCH /v9/projects/{id}` with `{"ssoProtection": null}` if you need
+     the auto-generated URL reachable before buying a domain.
+  2. `next build` runs full TypeScript checking; `next dev` doesn't — two
+     pre-existing type errors (a Yoga/Next route-handler signature mismatch
+     in `graphql/route.ts`, a duplicate `HonorRarity` export in `honor.ts`)
+     had been silently sitting there the whole project and only became
+     build-blocking once an actual production build ran.
+  3. Prisma's native query-engine binary is generated for whatever platform
+     `prisma generate` runs on locally (darwin-arm64 here), not Vercel's
+     Linux runtime — `binaryTargets` and `outputFileTracingIncludes`
+     workarounds were tried and didn't reliably fix it with this project's
+     custom generator output path + Turbopack. Real fix: upgraded to
+     **Prisma v7**, which replaces the native engine with a WASM query
+     compiler (platform-independent by construction) — this is also why the
+     "Stack" section above already said "Prisma v7" even when the installed
+     version was actually still 6.19.3, a real docs/reality mismatch until
+     this. v7 also moves connection URLs out of `schema.prisma`'s
+     `datasource` block entirely — they live in `prisma.config.ts` now
+     (`directUrl` there is gone too; just `url: env("DIRECT_URL")`), and
+     runtime connections go through the adapter in `lib/prisma.ts` as before.
+     Also needs Node 20.19+/22.12+/24.0+ — Node 23.x (an odd/non-LTS release)
+     doesn't satisfy that despite looking newer than 22.
+  4. Server Components doing `fetch()` against this app's own `/api/graphql`
+     need an *absolute* URL (server-side fetch has no implicit origin the
+     way browser fetch does) — `app/page.tsx` and `app/cards/page.tsx` both
+     had `http://localhost:3000` hardcoded, which only ever ran locally
+     until the first real deploy 500'd immediately. Fixed with
+     `lib/baseUrl.ts`, which uses Vercel's own `VERCEL_URL` env var.
 
 ## Data model (Sekai — all seeded/imported)
 

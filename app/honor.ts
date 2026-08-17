@@ -66,7 +66,6 @@ export function fanHonorForRank(rank: number): FanHonor | null {
 //   band 2 (ranks  51-75): purple replaces teal, left→right
 //   band 3+ : cycle bronze→teal→purple again
 // e.g. rank 55 = band 2, 1 into band → 1 purple + 4 teal.
-export type HonorRarity = "low" | "middle" | "high" | "highest";
 
 const PIP_CYCLE = [
   "/pips/pip_bronze.png",

@@ -7,12 +7,22 @@
 generator client {
   provider = "prisma-client"
   output   = "../app/generated/prisma"
+  // No binaryTargets needed — upgraded to Prisma v7 2026-08-17, which
+  // replaced the native Rust query engine with a WASM query compiler
+  // (platform-independent by construction). This is what actually fixed
+  // the "could not locate the Query Engine for runtime rhel-openssl-3.0.x"
+  // error on Vercel — binaryTargets + outputFileTracingIncludes workarounds
+  // were tried first on v6 and didn't work (Next.js's file-tracing doesn't
+  // reliably include natively-loaded binaries from a custom generator output
+  // path). See CLAUDE.md gotchas for the full troubleshooting trail.
 }
 
+// Prisma v7: connection URLs no longer live here — `url`/`directUrl` moved to
+// prisma.config.ts (for Migrate/CLI) and the `adapter` passed to PrismaClient
+// (for the app at runtime, see lib/prisma.ts). This block is now just the
+// provider declaration.
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
 }
 
 model Profile {

@@ -2048,8 +2048,19 @@ const { handleRequest } = createYoga({
   fetchAPI: { Response },
 });
 
-export {
-  handleRequest as GET,
-  handleRequest as POST,
-  handleRequest as OPTIONS,
-};
+// Yoga's handler signature doesn't structurally match Next's generated
+// Route Handler type (Next expects (req: NextRequest, ctx: {params}) =>
+// ..., Yoga provides (req: Request, ctx: Partial<ServerAdapterInitialContext>)
+// => ...) — they're runtime-compatible (Yoga only reads the request/context
+// shape it needs), just not type-identical. `next dev` never catches this
+// since it skips full type-checking; `next build` (what Vercel runs) does,
+// and fails on it — found deploying 2026-08-17. The cast is safe: this
+// mismatch is purely nominal, not a real behavioral incompatibility.
+type NextRouteHandler = (
+  request: Request,
+  context: { params: Promise<Record<string, never>> },
+) => Promise<Response>;
+
+export const GET = handleRequest as unknown as NextRouteHandler;
+export const POST = handleRequest as unknown as NextRouteHandler;
+export const OPTIONS = handleRequest as unknown as NextRouteHandler;

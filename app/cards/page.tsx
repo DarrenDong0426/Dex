@@ -1,4 +1,5 @@
 import { cardThumbnail } from "@/lib/sekaiAssets";
+import { baseUrl } from "@/lib/baseUrl";
 import Image from "next/image";
 
 type CardGridItem = {
@@ -14,7 +15,7 @@ type CardGridItem = {
 };
 
 async function getCards(): Promise<CardGridItem[]> {
-  const res = await fetch("http://localhost:3000/api/graphql", {
+  const res = await fetch(`${baseUrl()}/api/graphql`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

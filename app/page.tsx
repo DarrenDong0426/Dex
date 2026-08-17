@@ -1,7 +1,8 @@
 import ProfileClient from "@/app/ProfileClient";
+import { baseUrl } from "@/lib/baseUrl";
 
 async function getData() {
-  const res = await fetch("http://localhost:3000/api/graphql", {
+  const res = await fetch(`${baseUrl()}/api/graphql`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
