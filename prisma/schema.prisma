@@ -245,6 +245,20 @@ model AdminSession {
 // own). Equipped weapon is embedded directly on the character; artifacts
 // are a separate table since a character has up to 5. Full sync replaces
 // this data each run (see app/api/genshin/sync/route.ts).
+//
+// Singleton (always id=1) holding the live HoYoLAB session cookie, admin-
+// editable from GenshinEditor.tsx instead of living in HOYOLAB_COOKIE env —
+// on a deployed instance, updating an env var means the Vercel dashboard +
+// a redeploy; this lets a fresh cookie be pasted in directly through the
+// site's own admin panel (e.g. from a phone) when it periodically expires.
+// Deliberately no GraphQL query field exposes hoyolabCookie's value back —
+// write-only from the admin UI's perspective, never displayed/logged.
+model GenshinConfig {
+  id            Int      @id @default(1)
+  hoyolabCookie String?
+  updatedAt     DateTime @default(now()) @updatedAt
+}
+
 model GenshinCharacter {
   id                Int               @id // HoYoLAB avatar_id
   name              String

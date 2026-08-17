@@ -114,7 +114,7 @@ async function fetchCharacterList(
   });
   const json = await res.json();
   if (json.retcode === 10001) {
-    return { kind: "auth", message: "HOYOLAB_COOKIE has expired — re-extract it and update .env." };
+    return { kind: "auth", message: "The HoYoLAB cookie has expired — re-extract it and paste it into the Genshin admin panel." };
   }
   if (json.retcode !== 0) {
     return { kind: "other", message: json.message ?? `retcode ${json.retcode}` };
@@ -138,7 +138,7 @@ async function fetchCharacterDetails(
     });
     const json = await res.json();
     if (json.retcode === 10001) {
-      return { kind: "auth", message: "HOYOLAB_COOKIE has expired — re-extract it and update .env." };
+      return { kind: "auth", message: "The HoYoLAB cookie has expired — re-extract it and paste it into the Genshin admin panel." };
     }
     if (json.retcode !== 0) {
       return { kind: "other", message: json.message ?? `retcode ${json.retcode}` };
@@ -158,14 +158,23 @@ export type SyncResult =
   | { ok: true; synced: number; total: number }
   | { ok: false; error: string; message: string };
 
+// DB-stored cookie wins (admin-editable via GenshinEditor.tsx — see
+// GenshinConfig in schema.prisma for why); falls back to the HOYOLAB_COOKIE
+// env var so an existing deployment keeps working until someone pastes a
+// fresh one through the admin panel at least once.
+async function getHoyolabCookie(): Promise<string | undefined> {
+  const config = await prisma.genshinConfig.findUnique({ where: { id: 1 } });
+  return config?.hoyolabCookie ?? process.env.HOYOLAB_COOKIE ?? undefined;
+}
+
 export async function syncGenshin(): Promise<SyncResult> {
-  const cookie = process.env.HOYOLAB_COOKIE;
+  const cookie = await getHoyolabCookie();
   const uid = process.env.GENSHIN_UID;
   if (!cookie || !uid) {
     return {
       ok: false,
       error: "config",
-      message: "HOYOLAB_COOKIE or GENSHIN_UID missing from .env",
+      message: "No HoYoLAB cookie set (admin panel or HOYOLAB_COOKIE env) or GENSHIN_UID missing from .env",
     };
   }
 
@@ -325,8 +334,8 @@ async function alertCookieExpired() {
         from: process.env.RESEND_FROM,
         to,
         subject: "Dex: Genshin cookie expired",
-        html: `<p>The automatic Genshin sync failed because <code>HOYOLAB_COOKIE</code> has expired.</p>
-               <p>Re-extract a fresh cookie from HoYoLAB and update it in <code>.env</code> — the auto-sync will pick it up on the next visit.</p>`,
+        html: `<p>The automatic Genshin sync failed because the HoYoLAB session cookie has expired.</p>
+               <p>Re-extract a fresh cookie from HoYoLAB and paste it into the Genshin section of the admin panel — the auto-sync will pick it up on the next visit.</p>`,
       }),
     });
   } catch {

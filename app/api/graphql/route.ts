@@ -655,6 +655,7 @@ const { handleRequest } = createYoga({
         setHonorEdit(honorId: Int!, owned: Boolean!, level: Int): AdminHonor!
         setFanHonorLevel(characterId: Int!, level: Int!): FanHonorStatus!
         setProfile(name: String!, rank: Int!): Profile!
+        setGenshinCookie(cookie: String!): Boolean!
         setGenshinFavorite(characterId: Int!, favorite: Boolean!): GenshinCharacterItem!
         setGenshinCostume(characterId: Int!, costumeId: Int): GenshinCharacterItem!
         addAnimeEntry(url: String!): AnimeEntryItem!
@@ -1989,6 +1990,14 @@ const { handleRequest } = createYoga({
           return true;
         },
 
+        setGenshinCookie: async (_: unknown, { cookie }: { cookie: string }) => {
+          await prisma.genshinConfig.upsert({
+            where: { id: 1 },
+            update: { hoyolabCookie: cookie },
+            create: { id: 1, hoyolabCookie: cookie },
+          });
+          return true;
+        },
         setProfile: async (_: unknown, { name, rank }: { name: string; rank: number }) => {
           const existing = await prisma.profile.findFirst();
           if (existing) {

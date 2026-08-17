@@ -1,0 +1,49 @@
+name: Database backup
+
+# Closes the gap scripts/backup-db.sh (manual habit) leaves open: this runs
+# on a schedule so a snapshot exists even on days nobody's doing schema
+# work. Built after prisma migrate diff --shadow-database-url wiped the live
+# DB on 2026-08-15 with no backup to restore from — see CLAUDE.md's
+# "RECURRING GOTCHAS" for the full story.
+on:
+  schedule:
+    - cron: "17 8 * * *" # ~daily, off the :00 mark to avoid GitHub's cron congestion
+  workflow_dispatch: {} # lets you trigger a backup on demand from the Actions tab
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Dump database
+        env:
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: |
+          # Same approach as scripts/backup-db.sh: parse the connection
+          # string into PG* env vars rather than handing pg_dump the raw
+          # URL — the DB password contains a literal '@', which breaks
+          # pg_dump's own URI parser (it splits on the first '@', not the
+          # last). Node's URL parser handles this correctly.
+          eval "$(node -e "
+            const u = new URL(process.env.DIRECT_URL);
+            console.log('export PGHOST=' + JSON.stringify(u.hostname));
+            console.log('export PGPORT=' + JSON.stringify(u.port || '5432'));
+            console.log('export PGUSER=' + JSON.stringify(decodeURIComponent(u.username)));
+            console.log('export PGPASSWORD=' + JSON.stringify(decodeURIComponent(u.password)));
+            console.log('export PGDATABASE=' + JSON.stringify(u.pathname.replace(/^\//, '')));
+          ")"
+          STAMP=$(date -u +%Y-%m-%d_%H%M)
+          pg_dump --no-owner --no-privileges -f "dex_${STAMP}.sql"
+          echo "DUMP_FILE=dex_${STAMP}.sql" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dex-db-backup-${{ github.run_id }}
+          path: ${{ env.DUMP_FILE }}
+          retention-days: 30

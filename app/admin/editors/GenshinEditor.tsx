@@ -69,6 +69,10 @@ export default function GenshinEditor() {
   const [importResult, setImportResult] = useState<GoodImportResult | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
+  const [cookieInput, setCookieInput] = useState("");
+  const [savingCookie, setSavingCookie] = useState(false);
+  const [cookieSavedAt, setCookieSavedAt] = useState<number | null>(null);
+  const [cookieError, setCookieError] = useState<string | null>(null);
 
   function load() {
     gql(
@@ -147,6 +151,21 @@ export default function GenshinEditor() {
     }
   }
 
+  async function saveCookie() {
+    if (!cookieInput.trim()) return;
+    setSavingCookie(true);
+    setCookieError(null);
+    try {
+      await gql(`mutation($c:String!){ setGenshinCookie(cookie:$c) }`, { c: cookieInput.trim() });
+      setCookieInput(""); // never leave the pasted value sitting in the field
+      setCookieSavedAt(Date.now());
+    } catch (e) {
+      setCookieError(String((e as Error).message ?? e));
+    } finally {
+      setSavingCookie(false);
+    }
+  }
+
   if (error)
     return (
       <p className="text-sm text-[var(--accent-2)]">Couldn&apos;t load: {error}</p>
@@ -205,7 +224,7 @@ export default function GenshinEditor() {
           }}
         >
           {syncResult.error === "auth"
-            ? "⚠ Cookie expired — re-extract HOYOLAB_COOKIE and update .env."
+            ? "⚠ Cookie expired — paste a fresh one below."
             : `Sync failed: ${syncResult.message}`}
         </div>
       )}
@@ -214,6 +233,38 @@ export default function GenshinEditor() {
           Synced {syncResult.synced}/{syncResult.total} characters.
         </div>
       )}
+
+      {/* the HoYoLAB session cookie expires periodically — stored in the DB
+          (GenshinConfig) rather than an env var so it can be refreshed here,
+          from anywhere, without needing a Vercel dashboard + redeploy */}
+      <div
+        className="flex flex-col gap-2 rounded-xl border border-dashed p-4"
+        style={{ borderColor: "var(--line)" }}
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <input
+            type="password"
+            value={cookieInput}
+            onChange={(e) => setCookieInput(e.target.value)}
+            placeholder="Paste a fresh HoYoLAB cookie…"
+            className="w-full max-w-md rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--accent)]"
+          />
+          <button
+            onClick={saveCookie}
+            disabled={savingCookie || !cookieInput.trim()}
+            className="rounded-lg border px-4 py-2 text-sm font-bold transition disabled:opacity-50"
+            style={{ borderColor: "var(--line)", color: "var(--text)" }}
+          >
+            {savingCookie ? "Saving…" : "Save cookie"}
+          </button>
+          {cookieSavedAt && (
+            <span className="text-xs text-[var(--muted)]">Saved — next sync will use it.</span>
+          )}
+        </div>
+        {cookieError && (
+          <div className="text-xs text-[var(--accent-2)]">{cookieError}</div>
+        )}
+      </div>
 
       {/* full-inventory import — HoYoLAB only ever exposes equipped gear;
           benched artifacts/weapons only exist via a local OCR scan

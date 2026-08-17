@@ -906,10 +906,23 @@ function TopSongsStack({ songs }: { songs: FavoriteSong[] }) {
   const maxShift = Math.max(0, trackWidth - containerWidth);
   const activeIndex = Math.min(n - 1, Math.round(t * (n - 1)));
 
-  function handleMove(e: React.MouseEvent) {
+  function scrubTo(clientX: number) {
     const rect = outerRef.current?.getBoundingClientRect();
     if (!rect || !rect.width) return;
-    setT(Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)));
+    setT(Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)));
+  }
+
+  function handleMove(e: React.MouseEvent) {
+    scrubTo(e.clientX);
+  }
+
+  // touch equivalent of the mouse scrub — no onMouseMove/onMouseEnter/
+  // onMouseLeave on a touchscreen, so this stack was previously frozen on
+  // mobile with no way to scrub through it at all.
+  function handleTouchMove(e: React.TouchEvent) {
+    if (e.touches.length === 0) return;
+    setHovering(true);
+    scrubTo(e.touches[0].clientX);
   }
 
   return (
@@ -922,8 +935,14 @@ function TopSongsStack({ songs }: { songs: FavoriteSong[] }) {
           setHovering(false);
           setT(0);
         }}
+        onTouchStart={handleTouchMove}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={() => {
+          setHovering(false);
+          setT(0);
+        }}
         className="relative flex h-32 w-full items-center overflow-hidden"
-        style={{ cursor: "ew-resize" }}
+        style={{ cursor: "ew-resize", touchAction: "none" }}
       >
         <div
           className="relative flex-shrink-0 transition-transform duration-200 ease-out"
@@ -2194,6 +2213,7 @@ function EventsSection() {
             <button
               key={e.id}
               onMouseEnter={() => setHovered(e)}
+              onClick={() => setHovered(e)}
               className="aspect-[5/2] w-full flex-shrink-0 overflow-hidden rounded-2xl border transition"
               style={{
                 borderColor:
