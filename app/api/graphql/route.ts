@@ -1,12 +1,41 @@
 import { createSchema, createYoga } from "graphql-yoga";
 import { GraphQLError } from "graphql";
 import { after } from "next/server";
+import { cookies } from "next/headers";
+import { isValidSession } from "@/app/admin/auth";
 import { prisma } from "@/lib/prisma";
 import { maxLevelForRarity, MAX_MASTER_RANK, MAX_SKILL_LEVEL } from "@/app/profile/images";
 import { brawlerIconUrl, playerIconUrl } from "@/app/profile/brawlStarsImages";
 import { syncClashRoyaleIfStale } from "@/lib/clashRoyaleSync";
 import { syncBrawlStarsIfStale } from "@/lib/brawlStarsSync";
 import { syncGenshinIfStale } from "@/lib/genshinSync";
+
+// Every mutation in this file writes admin-only data (there's no other kind
+// of user) — this project has no concept of a non-admin write. Wrapping the
+// whole Mutation resolver map here, once, means a new mutation is gated
+// automatically just by existing, instead of relying on remembering to add
+// an isValidSession check to every single one individually (which is easy
+// to forget — verified live 2026-08-17 that an anonymous request with zero
+// cookies could call deleteAnimeEntry and have it actually execute).
+function withAdminAuth<T extends Record<string, (...args: never[]) => unknown>>(
+  mutations: T,
+): T {
+  const wrapped = {} as T;
+  for (const key of Object.keys(mutations) as (keyof T)[]) {
+    const original = mutations[key] as unknown as (...a: unknown[]) => unknown;
+    wrapped[key] = (async (...args: unknown[]) => {
+      const jar = await cookies();
+      const authed = await isValidSession(jar.get("dex_admin")?.value);
+      if (!authed) {
+        throw new GraphQLError("Unauthorized", {
+          extensions: { code: "UNAUTHORIZED", http: { status: 401 } },
+        });
+      }
+      return original(...args);
+    }) as unknown as T[keyof T];
+  }
+  return wrapped;
+}
 
 const MAL_URL_RE = /myanimelist\.net\/(anime|manga)\/(\d+)/;
 
@@ -1476,7 +1505,7 @@ const { handleRequest } = createYoga({
         },
       },
 
-      Mutation: {
+      Mutation: withAdminAuth({
         setCharacterEdit: async (
           _: unknown,
           {
@@ -2003,7 +2032,7 @@ const { handleRequest } = createYoga({
           );
           return true;
         },
-      },
+      }),
     },
   }),
   graphqlEndpoint: "/api/graphql",

@@ -481,7 +481,7 @@ function ProfileBanner() {
             </b>
           </div>
           <div className="mt-3.5 flex gap-6">
-            <Meta value={String(games.length)} label="games" />
+            <Meta value={String(games.length)} label="entries" />
             <Meta value="USA" label="region" />
           </div>
         </div>
