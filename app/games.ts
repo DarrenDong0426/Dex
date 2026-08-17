@@ -19,7 +19,16 @@ export type Game = {
   quickStats: Stat[];
   sections: string[]; // links out to /[slug]/[section]
   favorites: { name: string; rank: string; badge: string }[];
+  hasSummary?: boolean; // default true — set false to skip the Summary tab
+  // entirely (e.g. Clash Royale/Brawl Stars, which show their own player
+  // header directly on the one real section instead)
 };
+
+// the tab bar's full section list for a game — "Summary" first, unless the
+// game opts out via hasSummary: false
+export function tabsFor(game: Game): string[] {
+  return game.hasSummary === false ? game.sections : ["Summary", ...game.sections];
+}
 
 export type Mode = "dark" | "light";
 
@@ -137,12 +146,90 @@ export const themes: Record<string, Record<Mode, ThemeVars>> = {
       "--banner-b": "#9a5ac0",
     },
   },
+  // Clash Royale's own navy/gold/purple palette, distinct from Genshin's
+  // warmer gold and Sekai's mint/rose.
+  clashroyale: {
+    dark: {
+      "--bg": "#0a1128",
+      "--panel": "#121c3d",
+      "--panel-2": "#182650",
+      "--line": "#2c3d6e",
+      "--text": "#eef1ff",
+      "--muted": "#9aa8d4",
+      "--accent": "#f2c94a",
+      "--accent-2": "#7c5ce0",
+      "--scene":
+        "radial-gradient(60% 50% at 15% 12%, #7c5ce033, transparent 55%), radial-gradient(55% 50% at 85% 20%, #f2c94a22, transparent 55%), radial-gradient(60% 50% at 55% 95%, #2c5ee02e, transparent 55%), linear-gradient(180deg,#0a1128 0%,#0a1128 70%)",
+      "--gbanner": "linear-gradient(120deg,#f2c94a,#7c5ce0,#3a5ee0,#f2c94a)",
+      "--banner-bg": "linear-gradient(135deg,#182650,#0e1738)",
+      "--banner-text": "#f6f4ff",
+      "--banner-sub": "#9aa8d4",
+      "--banner-b": "#f2c94a",
+    },
+    light: {
+      "--bg": "#eef2fc",
+      "--panel": "#ffffff",
+      "--panel-2": "#e4eaf9",
+      "--line": "#c8d4f0",
+      "--text": "#1a2340",
+      "--muted": "#7684ac",
+      "--accent": "#c99414",
+      "--accent-2": "#6a4ec0",
+      "--scene":
+        "radial-gradient(60% 50% at 15% 12%, #d8caffcc, transparent 55%), radial-gradient(55% 50% at 85% 18%, #f2e0a8bb, transparent 55%), radial-gradient(60% 50% at 55% 96%, #c8d8ffaa, transparent 55%), linear-gradient(180deg,#f4f7fd 0%,#eef2fc 70%)",
+      "--gbanner": "linear-gradient(120deg,#e0b840,#8a6ad0,#5a7ee0)",
+      "--banner-bg": "linear-gradient(135deg,#fff,#eef2fb)",
+      "--banner-text": "#1a2340",
+      "--banner-sub": "#7684ac",
+      "--banner-b": "#a87c10",
+    },
+  },
+  // Brawl Stars' bright yellow/pink palette, deliberately loud to read
+  // distinctly from the other three.
+  brawlstars: {
+    dark: {
+      "--bg": "#1a0f2e",
+      "--panel": "#241645",
+      "--panel-2": "#2f1c58",
+      "--line": "#4a2e80",
+      "--text": "#fff8e8",
+      "--muted": "#c8a8e8",
+      "--accent": "#ffd23f",
+      "--accent-2": "#ff5fa2",
+      "--scene":
+        "radial-gradient(60% 50% at 15% 12%, #ffd23f2e, transparent 55%), radial-gradient(55% 50% at 85% 20%, #ff5fa22e, transparent 55%), radial-gradient(60% 50% at 55% 95%, #6e3ad02e, transparent 55%), linear-gradient(180deg,#1a0f2e 0%,#1a0f2e 70%)",
+      "--gbanner": "linear-gradient(120deg,#ffd23f,#ff5fa2,#a860e0,#ffd23f)",
+      "--banner-bg": "linear-gradient(135deg,#2f1c58,#190f30)",
+      "--banner-text": "#fff8e8",
+      "--banner-sub": "#c8a8e8",
+      "--banner-b": "#ffd23f",
+    },
+    light: {
+      "--bg": "#fff8ea",
+      "--panel": "#ffffff",
+      "--panel-2": "#fff0d0",
+      "--line": "#ffdca0",
+      "--text": "#3a2410",
+      "--muted": "#a08050",
+      "--accent": "#e08a00",
+      "--accent-2": "#e04888",
+      "--scene":
+        "radial-gradient(60% 50% at 15% 12%, #ffe8b8cc, transparent 55%), radial-gradient(55% 50% at 85% 18%, #ffd0e4bb, transparent 55%), radial-gradient(60% 50% at 55% 96%, #e8d0ffaa, transparent 55%), linear-gradient(180deg,#fffaf0 0%,#fff8ea 70%)",
+      "--gbanner": "linear-gradient(120deg,#f0c030,#f06aa8,#b070e0)",
+      "--banner-bg": "linear-gradient(135deg,#fff,#fff4e0)",
+      "--banner-text": "#3a2410",
+      "--banner-sub": "#a08050",
+      "--banner-b": "#c06a00",
+    },
+  },
 };
 
 const SEKAI_RAINBOW =
   "conic-gradient(from 90deg,#4ab7a0,#f0819e,#3a8ee0,#f0a04a,#9b6ee0,#4ab7a0)";
 const GENSHIN_GOLD = "linear-gradient(135deg,#1e3a6e,#d4af37)";
 const ANIME_VIOLET = "linear-gradient(135deg,#8b5ad0,#f07ea8)";
+const CLASHROYALE_BLUE = "linear-gradient(135deg,#1a2a5e,#f2c94a)";
+const BRAWLSTARS_YELLOW = "linear-gradient(135deg,#ffd23f,#ff5fa2)";
 
 export const games: Game[] = [
   {
@@ -192,7 +279,7 @@ export const games: Game[] = [
       { value: "36", label: "abyss ★" },
       { value: "5", label: "regions" },
     ],
-    sections: ["Characters", "Creations"],
+    sections: ["Characters", "Gear", "Creations"],
     favorites: [
       { name: "Furina", rank: "Lv90 · C2", badge: "Fontaine" },
       { name: "Neuvillette", rank: "Lv90 · C0", badge: "Fontaine" },
@@ -207,11 +294,7 @@ export const games: Game[] = [
     logo: "AN",
     logoBg: ANIME_VIOLET,
     logoSrc: "/logos/anime.png",
-    info: [
-      { value: "Itami", label: "username" },
-      { value: "—", label: "list" },
-      { value: "—", label: "since" },
-    ],
+    info: [],
     // hero + quickStats are placeholders; wired to real counts when the
     // Anime table + resolver land (total watched / watching / favorites).
     hero: { value: "0", label: "completed" },
@@ -225,5 +308,53 @@ export const games: Game[] = [
     // anime-themed things Darren makes). No per-title sub-pages.
     sections: ["Library", "Creations"],
     favorites: [],
+  },
+  {
+    slug: "clashroyale",
+    name: "Clash Royale",
+    tag: "ARENA · REAL-TIME STRATEGY",
+    kind: "game",
+    logo: "CR",
+    logoSrc: "/logos/CR.webp",
+    logoBg: CLASHROYALE_BLUE,
+    info: [{ value: "noname", label: "username" }],
+    // hero + quickStats are placeholders — real counts come from
+    // ClashRoyaleSection once synced; see app/api/clashroyale/sync/route.ts.
+    hero: { value: "0", label: "trophies" },
+    quickStats: [
+      { value: "0", label: "cards owned" },
+      { value: "—", label: "arena" },
+      { value: "—", label: "clan" },
+      { value: "—", label: "level" },
+    ],
+    sections: ["Cards"],
+    favorites: [],
+    // no Summary tab — the Cards page shows a player header (pfp, trophies,
+    // level) directly instead
+    hasSummary: false,
+  },
+  {
+    slug: "brawlstars",
+    name: "Brawl Stars",
+    tag: "3V3 · BATTLE ARENA",
+    kind: "game",
+    logo: "BS",
+    logoSrc: "/logos/BR.avif",
+    logoBg: BRAWLSTARS_YELLOW,
+    info: [{ value: "Noname", label: "username" }],
+    // hero + quickStats are placeholders — real counts come from
+    // BrawlStarsSection once synced; see app/api/brawlstars/sync/route.ts.
+    hero: { value: "0", label: "trophies" },
+    quickStats: [
+      { value: "0", label: "brawlers" },
+      { value: "—", label: "club" },
+      { value: "—", label: "level" },
+      { value: "—", label: "rank" },
+    ],
+    sections: ["Brawlers"],
+    favorites: [],
+    // no Summary tab — the Brawlers page shows a player header (pfp,
+    // trophies, level) directly instead
+    hasSummary: false,
   },
 ];

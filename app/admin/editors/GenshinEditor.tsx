@@ -51,12 +51,22 @@ type SyncResult =
   | { ok: true; synced: number; total: number }
   | { ok: false; error: string; message: string };
 
+type GoodImportResult =
+  | {
+      ok: true;
+      weapons: { imported: number; unmatched: string[] };
+      artifacts: { imported: number; unmatched: string[] };
+    }
+  | { ok: false; error: string };
+
 export default function GenshinEditor() {
   const [chars, setChars] = useState<GenshinCharacter[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [favoriteError, setFavoriteError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<GoodImportResult | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
 
@@ -118,6 +128,22 @@ export default function GenshinEditor() {
       setSyncResult({ ok: false, error: "network", message: String(e) });
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function importGood(file: File) {
+    setImporting(true);
+    setImportResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/genshin/import-good", { method: "POST", body: form });
+      const json = await res.json();
+      setImportResult(json);
+    } catch (e) {
+      setImportResult({ ok: false, error: String(e) });
+    } finally {
+      setImporting(false);
     }
   }
 
@@ -188,6 +214,63 @@ export default function GenshinEditor() {
           Synced {syncResult.synced}/{syncResult.total} characters.
         </div>
       )}
+
+      {/* full-inventory import — HoYoLAB only ever exposes equipped gear;
+          benched artifacts/weapons only exist via a local OCR scan
+          (Inventory Kamera et al.) exported as a .GOOD file, uploaded here */}
+      <div
+        className="flex flex-col gap-2 rounded-xl border border-dashed p-4"
+        style={{ borderColor: "var(--line)" }}
+      >
+        <div className="flex flex-wrap items-center gap-3">
+          <label
+            className="cursor-pointer rounded-lg border px-4 py-2 text-sm font-bold transition"
+            style={{ borderColor: "var(--line)", color: "var(--text)" }}
+          >
+            {importing ? "Importing…" : "Upload .GOOD file"}
+            <input
+              type="file"
+              accept=".good,.json,application/json"
+              className="hidden"
+              disabled={importing}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = ""; // allow re-uploading the same filename
+                if (file) importGood(file);
+              }}
+            />
+          </label>
+          <span className="text-xs text-[var(--muted)]">
+            Full artifact/weapon inventory (equipped + benched), scanned locally with
+            Inventory Kamera — HoYoLAB sync above only ever sees what&apos;s equipped.
+          </span>
+        </div>
+
+        {importResult && !importResult.ok && (
+          <div className="rounded-lg border border-[var(--accent-2)] px-3 py-2 text-xs text-[var(--accent-2)]">
+            Import failed: {importResult.error}
+          </div>
+        )}
+        {importResult && importResult.ok && (
+          <div className="rounded-lg border border-[var(--line)] px-3 py-2 text-xs text-[var(--muted)]">
+            <div>
+              Imported {importResult.weapons.imported} weapons, {importResult.artifacts.imported} artifacts.
+            </div>
+            {importResult.weapons.unmatched.length > 0 && (
+              <div className="mt-1">
+                ⚠ {importResult.weapons.unmatched.length} weapon key(s) not in the master
+                table yet: {importResult.weapons.unmatched.join(", ")}
+              </div>
+            )}
+            {importResult.artifacts.unmatched.length > 0 && (
+              <div className="mt-1">
+                ⚠ {importResult.artifacts.unmatched.length} artifact set key(s) not in the
+                master table yet: {importResult.artifacts.unmatched.join(", ")}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         {filtered.map((c) => (

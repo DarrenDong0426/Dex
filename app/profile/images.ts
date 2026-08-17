@@ -6,10 +6,14 @@ import { UNIT_COLORS, EVENT_RANK_TIERS } from "./types";
 // ── character icons / art ───────────────────────────────────────
 
 // Self-hosted character icons in /public/chara/, named by lowercase given name
-// (e.g. /chara/ichika.png). Name comes as "Hoshino Ichika" (surname first),
-// so the given name is the LAST word.
+// (e.g. /chara/ichika.png). The resolver builds `name` as givenName + " " +
+// firstName (EN order, e.g. "Ichika Hoshino" — see the GraphQL Character
+// resolver), so the given name is the FIRST word, not the last. (Bug found
+// 2026-08-15: this used to take the last word, which only worked for the
+// mononym cases — MEIKO/KAITO — and silently 404'd every other character's
+// face icon.)
 export function charaIcon(fullName: string): string {
-  const given = fullName.trim().split(/\s+/).pop()?.toLowerCase() ?? "";
+  const given = fullName.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
   return `/chara/${given}.png`;
 }
 

@@ -41,3 +41,6 @@ yarn-error.log*
 next-env.d.ts
 
 /app/generated/prisma
+
+# local DB dumps (scripts/backup-db.sh) — never commit real data
+/backups/

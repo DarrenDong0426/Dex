@@ -83,6 +83,7 @@ model Music {
   id              Int                 @id
   title           String
   assetbundleName String
+  isHidden        Boolean             @default(false) // manually excluded from display; kept as a row (not deleted) so /api/seed/musics' skipDuplicates leaves it alone on future reseeds
   results         UserMusicResult[]
   favorites       UserMusicFavorite[]
 }
@@ -297,6 +298,154 @@ model GenshinArtifact {
   mainStatName  String
   mainStatValue String
   substats      Json // [{ name: string, value: string }]
+}
+
+// Master data for the two tables below, seeded once from gi.yatta.moe (same
+// source/precedent as GenshinCharacterMaster) — not touched by any sync.
+// goodKey is resolved at seed time (lib/genshinGoodKeys.ts) by matching a
+// normalized name against genshin-optimizer's own authoritative key list —
+// null means no exact match was found (newer/event items that source
+// hasn't caught up to yet), never a guessed value. GenshinArtifactItem/
+// GenshinWeaponItem (the GOOD-import inventory tables) join on this.
+model GenshinWeaponMaster {
+  id         Int                 @id // gi.yatta.moe weapon id
+  name       String
+  icon       String
+  rarity     Int
+  weaponType String // Sword / Claymore / Polearm / Catalyst / Bow
+  goodKey    String?             @unique // GOOD-format weapon key crosswalk
+  items      GenshinWeaponItem[]
+}
+
+model GenshinArtifactSetMaster {
+  id        Int                   @id // gi.yatta.moe reliquary-set id
+  name      String
+  icon      String
+  rarity    Int // highest rarity this set drops at
+  onePiece  String? // the 4 "Prayers for X" sets only have a single 1pc bonus, not 2pc/4pc
+  twoPiece  String?
+  fourPiece String?
+  goodKey   String?               @unique // GOOD-format setKey crosswalk
+  items     GenshinArtifactItem[]
+}
+
+// Full artifact/weapon inventory (equipped + benched), imported wholesale
+// from a .GOOD export produced by a local OCR scanner (Inventory Kamera /
+// Genshin Optimizer's scanner) — see app/api/genshin/import-good/route.ts.
+// Deliberately separate from GenshinArtifact/GenshinCharacter.weapon* above,
+// which stay HoYoLAB-sync-owned (equipped-only, auto-refreshed); this table
+// is the only place benched gear shows up at all, since HoYoLAB's public API
+// never exposes it. Replaced wholesale on each import — a GOOD export is a
+// full inventory snapshot, not a diff.
+model GenshinArtifactItem {
+  id          Int                      @id @default(autoincrement())
+  setId       Int
+  set         GenshinArtifactSetMaster @relation(fields: [setId], references: [id])
+  slotKey     String // flower / plume / sands / goblet / circlet (GOOD's slot names)
+  level       Int
+  rarity      Int
+  lock        Boolean
+  location    String? // raw GOOD character key if equipped (e.g. "HuTao"), null if benched
+  mainStatKey String
+  substats    Json // [{ key: string, value: number }]
+}
+
+model GenshinWeaponItem {
+  id         Int                 @id @default(autoincrement())
+  weaponId   Int
+  weapon     GenshinWeaponMaster @relation(fields: [weaponId], references: [id])
+  level      Int
+  ascension  Int
+  refinement Int
+  lock       Boolean
+  location   String? // raw GOOD character key if equipped, null if benched
+}
+
+// Synced wholesale from Supercell's official API (via RoyaleAPI's proxy —
+// see app/api/clashroyale/sync/route.ts) — no master data, only what the
+// player endpoint returns. `cards` there is effectively the full card pool
+// (count 0 for ones never found), so this table doubles as both "owned" and
+// "browse all" — no separate locked/master table needed, unlike Genshin.
+model ClashRoyaleCard {
+  id                Int      @id // Supercell card id
+  name              String
+  iconUrl           String // API-provided (content-hashed URL, can't rebuild from id)
+  level             Int
+  maxLevel          Int
+  starLevel         Int?
+  evolutionLevel    Int?
+  maxEvolutionLevel Int?
+  rarity            String
+  count             Int
+  elixirCost        Int? // absent for Tower Troops (isSupport)
+  isSupport         Boolean  @default(false) // Tower Troop, not a deck card
+  updatedAt         DateTime @default(now()) @updatedAt
+}
+
+// Singleton (always id=1) — overall account stats shown on the profile's
+// Clash Royale page (name/level/trophies), synced alongside the card roster.
+// No player pfp — the API's only candidate (currentFavouriteCard, a
+// player-chosen card emblem) was tried and dropped as confusing/unwanted.
+model ClashRoyalePlayer {
+  id           Int      @id @default(1)
+  name         String
+  expLevel     Int
+  trophies     Int
+  bestTrophies Int
+  wins         Int
+  losses       Int
+  battleCount  Int
+  clanName     String?
+  arenaName    String?
+  updatedAt    DateTime @default(now()) @updatedAt
+}
+
+// Synced wholesale from Supercell's official API (via RoyaleAPI's proxy —
+// see app/api/brawlstars/sync/route.ts). Only brawlers the player has
+// actually unlocked appear in the API response (unlike CR's full pool), and
+// the API returns no icon URL at all — iconUrl is built at render time from
+// id (app/profile/brawlStarsImages.ts), not stored, per the project's
+// "build from id, don't store URLs" convention.
+model BrawlStarsBrawler {
+  id              Int      @id // Supercell brawler id
+  name            String
+  power           Int
+  rank            Int
+  trophies        Int
+  highestTrophies Int
+  gadgets         Json     @default("[]") // [{ id, name }]
+  starPowers      Json     @default("[]") // [{ id, name }]
+  gears           Json     @default("[]") // [{ id, name, level }]
+  updatedAt       DateTime @default(now()) @updatedAt
+}
+
+// Full playable roster (owned + unowned), used only to render locked
+// brawlers on the Brawlers tab — mirrors GenshinCharacterMaster's role.
+// Sourced from Supercell's static /v1/brawlers endpoint (synced alongside
+// BrawlStarsBrawler in the same sync route), since the player endpoint only
+// ever returns brawlers you've actually unlocked.
+model BrawlStarsBrawlerMaster {
+  id   Int    @id // Supercell brawler id
+  name String
+}
+
+// Singleton (always id=1) — overall account stats shown on the profile's
+// Brawl Stars page (pfp/trophies/level), synced alongside the brawler
+// roster. iconId is the player's chosen profile icon id — pfp URL is built
+// at render time (app/profile/brawlStarsImages.ts), same as brawler
+// portraits, since the API returns no icon URL, only the id.
+model BrawlStarsPlayer {
+  id              Int      @id @default(1)
+  name            String
+  expLevel        Int
+  trophies        Int
+  highestTrophies Int
+  victories3v3    Int
+  soloVictories   Int
+  duoVictories    Int
+  clubName        String?
+  iconId          Int
+  updatedAt       DateTime @default(now()) @updatedAt
 }
 
 // Manually added via the admin panel (paste a MAL URL) — Dex never syncs

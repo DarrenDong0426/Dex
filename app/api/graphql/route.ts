@@ -1,7 +1,12 @@
 import { createSchema, createYoga } from "graphql-yoga";
 import { GraphQLError } from "graphql";
+import { after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { maxLevelForRarity, MAX_MASTER_RANK, MAX_SKILL_LEVEL } from "@/app/profile/images";
+import { brawlerIconUrl, playerIconUrl } from "@/app/profile/brawlStarsImages";
+import { syncClashRoyaleIfStale } from "@/lib/clashRoyaleSync";
+import { syncBrawlStarsIfStale } from "@/lib/brawlStarsSync";
+import { syncGenshinIfStale } from "@/lib/genshinSync";
 
 const MAL_URL_RE = /myanimelist\.net\/(anime|manga)\/(\d+)/;
 
@@ -330,10 +335,17 @@ const { handleRequest } = createYoga({
         adminStats: AdminStats!
         genshinCharacters: [GenshinCharacterItem!]!
         genshinRoster: [GenshinRosterItem!]!
+        genshinWeaponInventory: [GenshinWeaponInventoryItem!]!
+        genshinArtifactInventory: [GenshinArtifactInventoryItem!]!
         animeEntries: [AnimeEntryItem!]!
         animeSearch(query: String!, kind: String!): [AnimeSearchResult!]!
         siteProfile: SiteProfileItem!
         entryOrder: [String!]!
+        clashRoyaleCards: [ClashRoyaleCardItem!]!
+        clashRoyalePlayer: ClashRoyalePlayerItem
+        brawlStarsBrawlers: [BrawlStarsBrawlerItem!]!
+        brawlStarsPlayer: BrawlStarsPlayerItem
+        brawlStarsRoster: [BrawlStarsRosterItem!]!
       }
       type SiteProfileItem {
         displayName: String!
@@ -359,6 +371,83 @@ const { handleRequest } = createYoga({
         animeFinishedCount: Int!
         animeFavoriteCount: Int!
         animeQueuedCount: Int!
+        clashRoyaleCardCount: Int!
+        clashRoyaleTrophies: Int!
+        brawlStarsBrawlerCount: Int!
+        brawlStarsTrophies: Int!
+      }
+      type ClashRoyaleCardItem {
+        id: Int!
+        name: String!
+        iconUrl: String!
+        level: Int!
+        maxLevel: Int!
+        starLevel: Int
+        evolutionLevel: Int
+        maxEvolutionLevel: Int
+        rarity: String!
+        count: Int!
+        elixirCost: Int
+        isSupport: Boolean!
+        updatedAt: String!
+      }
+      type ClashRoyalePlayerItem {
+        name: String!
+        expLevel: Int!
+        trophies: Int!
+        bestTrophies: Int!
+        wins: Int!
+        losses: Int!
+        battleCount: Int!
+        clanName: String
+        arenaName: String
+        updatedAt: String!
+      }
+      type BrawlStarsGadget {
+        id: Int!
+        name: String!
+      }
+      type BrawlStarsGear {
+        id: Int!
+        name: String!
+        level: Int!
+      }
+      type BrawlStarsBrawlerItem {
+        id: Int!
+        name: String!
+        iconUrl: String!
+        power: Int!
+        rank: Int!
+        trophies: Int!
+        highestTrophies: Int!
+        gadgets: [BrawlStarsGadget!]!
+        starPowers: [BrawlStarsGadget!]!
+        gears: [BrawlStarsGear!]!
+        updatedAt: String!
+      }
+      type BrawlStarsRosterItem {
+        id: Int!
+        name: String!
+        iconUrl: String!
+        owned: Boolean!
+        power: Int
+        trophies: Int
+        highestTrophies: Int
+        gadgets: [BrawlStarsGadget!]
+        starPowers: [BrawlStarsGadget!]
+        gears: [BrawlStarsGear!]
+      }
+      type BrawlStarsPlayerItem {
+        name: String!
+        expLevel: Int!
+        trophies: Int!
+        highestTrophies: Int!
+        victories3v3: Int!
+        soloVictories: Int!
+        duoVictories: Int!
+        clubName: String
+        iconUrl: String!
+        updatedAt: String!
       }
       type GenshinSubstat {
         name: String!
@@ -432,6 +521,50 @@ const { handleRequest } = createYoga({
         costumes: [GenshinCostumeItem!]
         selectedCostumeId: Int
       }
+      # Full artifact/weapon inventory (equipped + benched) imported from a
+      # .GOOD scan — see app/api/genshin/import-good/route.ts. Distinct from
+      # GenshinArtifactItem/GenshinCharacterItem above, which are HoYoLAB's
+      # equipped-only sync.
+      type GenshinWeaponMasterInfo {
+        id: Int!
+        name: String!
+        icon: String!
+        rarity: Int!
+        weaponType: String!
+      }
+      type GenshinWeaponInventoryItem {
+        id: Int!
+        level: Int!
+        ascension: Int!
+        refinement: Int!
+        lock: Boolean!
+        location: String
+        weapon: GenshinWeaponMasterInfo!
+      }
+      type GenshinArtifactSetInfo {
+        id: Int!
+        name: String!
+        icon: String!
+        rarity: Int!
+        onePiece: String
+        twoPiece: String
+        fourPiece: String
+      }
+      type GenshinInventorySubstat {
+        key: String!
+        value: Float!
+      }
+      type GenshinArtifactInventoryItem {
+        id: Int!
+        slotKey: String!
+        level: Int!
+        rarity: Int!
+        lock: Boolean!
+        location: String
+        mainStatKey: String!
+        substats: [GenshinInventorySubstat!]!
+        set: GenshinArtifactSetInfo!
+      }
       type AnimeEntryItem {
         id: Int!
         title: String!
@@ -492,6 +625,7 @@ const { handleRequest } = createYoga({
         setStampEdit(stampId: Int!, owned: Boolean!): StampItem!
         setHonorEdit(honorId: Int!, owned: Boolean!, level: Int): AdminHonor!
         setFanHonorLevel(characterId: Int!, level: Int!): FanHonorStatus!
+        setProfile(name: String!, rank: Int!): Profile!
         setGenshinFavorite(characterId: Int!, favorite: Boolean!): GenshinCharacterItem!
         setGenshinCostume(characterId: Int!, costumeId: Int): GenshinCharacterItem!
         addAnimeEntry(url: String!): AnimeEntryItem!
@@ -599,10 +733,14 @@ const { handleRequest } = createYoga({
             const displayName =
               givenName +
               (uc.character.firstName ? " " + uc.character.firstName : "");
-            // The honor name is "Ichika Fan" (given name first). In this DB the
-            // given name is the LAST word of the display name (name is stored
-            // surname-first), so match honors on that.
-            const given = displayName.trim().split(" ").at(-1) ?? "";
+            // The honor name is "Ichika Fan" (given name first). displayName
+            // is built as givenName + " " + firstName above (also given-name-
+            // first), so the given name is the FIRST word, not the last.
+            // (Same bug class as charaIcon() in app/profile/images.ts — was
+            // wrongly taking the last word here too, which only matched the
+            // mononym cases and silently null'd honorAsset for every other
+            // character, breaking the Summary tab's Kizuna honor badges.)
+            const given = displayName.trim().split(" ").at(0) ?? "";
             const rarity = rarityForRank(uc.characterRank);
             const honorRow = allFanHonors.find(
               (h) => h.name.startsWith(given) && h.honorRarity === rarity,
@@ -672,7 +810,7 @@ const { handleRequest } = createYoga({
           if (g.__musicListCache) return g.__musicListCache;
 
           const [songs, results, difficulties, tags, favorites] = await Promise.all([
-            prisma.music.findMany({ orderBy: { id: "asc" } }),
+            prisma.music.findMany({ where: { isHidden: false }, orderBy: { id: "asc" } }),
             prisma.userMusicResult.findMany(),
             prisma.musicDifficulty.findMany(),
             prisma.musicTag.findMany(),
@@ -999,6 +1137,10 @@ const { handleRequest } = createYoga({
             animeFinishedCount,
             animeFavoriteCount,
             animeQueuedCount,
+            clashRoyaleCardCount,
+            clashRoyalePlayerRow,
+            brawlStarsBrawlerCount,
+            brawlStarsPlayerRow,
           ] = await Promise.all([
             prisma.userCharacter.count(),
             prisma.userCard.count(),
@@ -1013,7 +1155,13 @@ const { handleRequest } = createYoga({
             prisma.animeEntry.count({ where: { parentId: null, status: "Finished" } }),
             prisma.animeEntry.count({ where: { parentId: null, isFavorite: true } }),
             prisma.animeEntry.count({ where: { parentId: null, isQueued: true } }),
+            prisma.clashRoyaleCard.count({ where: { count: { gt: 0 } } }),
+            prisma.clashRoyalePlayer.findUnique({ where: { id: 1 } }),
+            prisma.brawlStarsBrawler.count(),
+            prisma.brawlStarsPlayer.findUnique({ where: { id: 1 } }),
           ]);
+          const clashRoyaleTrophies = clashRoyalePlayerRow?.trophies ?? 0;
+          const brawlStarsTrophies = brawlStarsPlayerRow?.trophies ?? 0;
           return {
             characterCount,
             cardCount,
@@ -1028,10 +1176,17 @@ const { handleRequest } = createYoga({
             animeFinishedCount,
             animeFavoriteCount,
             animeQueuedCount,
+            clashRoyaleCardCount,
+            clashRoyaleTrophies,
+            brawlStarsBrawlerCount,
+            brawlStarsTrophies,
           };
         },
 
         genshinCharacters: async () => {
+          // best-effort daily refresh — scheduled after the response is
+          // sent, so this never adds latency to the page load
+          after(() => syncGenshinIfStale());
           const chars = await prisma.genshinCharacter.findMany({
             include: { artifacts: true },
             orderBy: { level: "desc" },
@@ -1051,6 +1206,9 @@ const { handleRequest } = createYoga({
         },
 
         genshinRoster: async () => {
+          // best-effort daily refresh — scheduled after the response is
+          // sent, so this never adds latency to the page load
+          after(() => syncGenshinIfStale());
           const [owned, master] = await Promise.all([
             prisma.genshinCharacter.findMany({ include: { artifacts: true } }),
             prisma.genshinCharacterMaster.findMany(),
@@ -1156,6 +1314,25 @@ const { handleRequest } = createYoga({
           return rows;
         },
 
+        genshinWeaponInventory: async () => {
+          const items = await prisma.genshinWeaponItem.findMany({
+            include: { weapon: true },
+            orderBy: [{ weapon: { rarity: "desc" } }, { level: "desc" }],
+          });
+          return items;
+        },
+
+        genshinArtifactInventory: async () => {
+          const items = await prisma.genshinArtifactItem.findMany({
+            include: { set: true },
+            orderBy: [{ rarity: "desc" }, { level: "desc" }],
+          });
+          return items.map((a) => ({
+            ...a,
+            substats: a.substats as { key: string; value: number }[],
+          }));
+        },
+
         animeEntries: async () => {
           // manually dragged (queueOrder set) first, in that order; anything
           // never touched in the admin board falls back to newest-first —
@@ -1217,11 +1394,65 @@ const { handleRequest } = createYoga({
         entryOrder: async () => {
           const rows = await prisma.entryOrder.findMany({ orderBy: { order: "asc" } });
           const saved = rows.map((r) => r.slug);
-          const fallback = ["sekai", "genshin", "anime"];
+          const fallback = ["sekai", "genshin", "anime", "clashroyale", "brawlstars"];
           // append any slug that hasn't been manually ordered yet (new
           // entries added to games.ts after the admin last touched order)
           const rest = fallback.filter((slug) => !saved.includes(slug));
           return [...saved, ...rest];
+        },
+        clashRoyaleCards: async () => {
+          // best-effort daily refresh — scheduled after the response is
+          // sent, so this never adds latency to the page load
+          after(() => syncClashRoyaleIfStale());
+          const cards = await prisma.clashRoyaleCard.findMany({
+            orderBy: [{ isSupport: "asc" }, { elixirCost: "asc" }, { name: "asc" }],
+          });
+          return cards.map((c) => ({ ...c, updatedAt: String(c.updatedAt.getTime()) }));
+        },
+        brawlStarsBrawlers: async () => {
+          const brawlers = await prisma.brawlStarsBrawler.findMany({
+            orderBy: { name: "asc" },
+          });
+          return brawlers.map((b) => ({
+            ...b,
+            iconUrl: brawlerIconUrl(b.id),
+            updatedAt: String(b.updatedAt.getTime()),
+          }));
+        },
+        brawlStarsRoster: async () => {
+          // best-effort daily refresh — scheduled after the response is
+          // sent, so this never adds latency to the page load
+          after(() => syncBrawlStarsIfStale());
+          const [master, owned] = await Promise.all([
+            prisma.brawlStarsBrawlerMaster.findMany({ orderBy: { name: "asc" } }),
+            prisma.brawlStarsBrawler.findMany(),
+          ]);
+          const ownedById = new Map(owned.map((b) => [b.id, b]));
+          return master.map((m) => {
+            const o = ownedById.get(m.id);
+            return {
+              id: m.id,
+              name: m.name,
+              iconUrl: brawlerIconUrl(m.id),
+              owned: Boolean(o),
+              power: o?.power ?? null,
+              trophies: o?.trophies ?? null,
+              highestTrophies: o?.highestTrophies ?? null,
+              gadgets: o?.gadgets ?? null,
+              starPowers: o?.starPowers ?? null,
+              gears: o?.gears ?? null,
+            };
+          });
+        },
+        clashRoyalePlayer: async () => {
+          const p = await prisma.clashRoyalePlayer.findUnique({ where: { id: 1 } });
+          if (!p) return null;
+          return { ...p, updatedAt: String(p.updatedAt.getTime()) };
+        },
+        brawlStarsPlayer: async () => {
+          const p = await prisma.brawlStarsPlayer.findUnique({ where: { id: 1 } });
+          if (!p) return null;
+          return { ...p, iconUrl: playerIconUrl(p.iconId), updatedAt: String(p.updatedAt.getTime()) };
         },
 
         bondHonorList: async () => {
@@ -1729,6 +1960,18 @@ const { handleRequest } = createYoga({
           return true;
         },
 
+        setProfile: async (_: unknown, { name, rank }: { name: string; rank: number }) => {
+          const existing = await prisma.profile.findFirst();
+          if (existing) {
+            return prisma.profile.update({
+              where: { id: existing.id },
+              data: { name, rank },
+            });
+          }
+          return prisma.profile.create({
+            data: { name, rank, createdAt: new Date() },
+          });
+        },
         setSiteProfile: async (
           _: unknown,
           data: {

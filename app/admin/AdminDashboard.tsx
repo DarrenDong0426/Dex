@@ -13,13 +13,17 @@ import ThemeToggle from "@/app/ThemeToggle";
 import { logoutAction } from "./actions";
 import { gql } from "./editors/gql";
 import CharactersEditor from "./editors/CharactersEditor";
+import SekaiProfileEditor from "./editors/SekaiProfileEditor";
 import CardsEditor from "./editors/CardsEditor";
 import MusicEditor from "./editors/MusicEditor";
 import EventsEditor from "./editors/EventsEditor";
 import StampsEditor from "./editors/StampsEditor";
 import HonorsEditor from "./editors/HonorsEditor";
 import GenshinEditor from "./editors/GenshinEditor";
+import GenshinGearSection from "@/app/profile/GenshinGearSection";
 import AnimeEditor from "./editors/AnimeEditor";
+import ClashRoyaleEditor from "./editors/ClashRoyaleEditor";
+import BrawlStarsEditor from "./editors/BrawlStarsEditor";
 import LogisticsEditor from "./editors/LogisticsEditor";
 
 type Entry = {
@@ -39,7 +43,7 @@ const ENTRIES: Entry[] = [
     name: "Project Sekai",
     kind: "game",
     built: true,
-    sections: ["Characters", "Cards", "Music", "Events", "Stamps", "Honors"],
+    sections: ["Profile", "Characters", "Cards", "Music", "Events", "Stamps", "Honors"],
     hasCsv: true,
   },
   {
@@ -48,8 +52,9 @@ const ENTRIES: Entry[] = [
     kind: "game",
     built: true,
     // synced wholesale from HoYoLAB (level/const/talents/weapon/artifacts)
-    // via GenshinEditor's "Sync now" — no manual editing, no CSV
-    sections: ["Characters"],
+    // via GenshinEditor's "Sync now" — no manual editing, no CSV. "Gear" is
+    // the full artifact/weapon inventory imported from a .GOOD scan instead.
+    sections: ["Characters", "Gear"],
     hasCsv: false,
   },
   {
@@ -58,6 +63,26 @@ const ENTRIES: Entry[] = [
     kind: "anime",
     built: true,
     sections: ["Library"],
+    hasCsv: false,
+  },
+  {
+    slug: "clashroyale",
+    name: "Clash Royale",
+    kind: "game",
+    built: true,
+    // synced wholesale from Supercell's API via ClashRoyaleEditor's
+    // "Sync now" — no manual editing, no CSV
+    sections: ["Cards"],
+    hasCsv: false,
+  },
+  {
+    slug: "brawlstars",
+    name: "Brawl Stars",
+    kind: "game",
+    built: true,
+    // synced wholesale from Supercell's API via BrawlStarsEditor's
+    // "Sync now" — no manual editing, no CSV
+    sections: ["Brawlers"],
     hasCsv: false,
   },
 ];
@@ -413,6 +438,10 @@ type AdminStats = {
   animeFinishedCount: number;
   animeFavoriteCount: number;
   animeQueuedCount: number;
+  clashRoyaleCardCount: number;
+  clashRoyaleTrophies: number;
+  brawlStarsBrawlerCount: number;
+  brawlStarsTrophies: number;
 };
 
 function AdminHeader({
@@ -428,7 +457,7 @@ function AdminHeader({
 
   useEffect(() => {
     gql(
-      `{ adminStats { characterCount cardCount songFavoriteCount eventCount stampCount honorCount genshinCharacterCount genshinFavoriteCount animeCount animeWatchingCount animeFinishedCount animeFavoriteCount animeQueuedCount } }`,
+      `{ adminStats { characterCount cardCount songFavoriteCount eventCount stampCount honorCount genshinCharacterCount genshinFavoriteCount animeCount animeWatchingCount animeFinishedCount animeFavoriteCount animeQueuedCount clashRoyaleCardCount clashRoyaleTrophies brawlStarsBrawlerCount brawlStarsTrophies } }`,
     )
       .then((d) => setStats(d.adminStats))
       .catch(() => {});
@@ -454,6 +483,14 @@ function AdminHeader({
       { value: s.animeFinishedCount, label: "finished" },
       { value: s.animeFavoriteCount, label: "favorites" },
       { value: s.animeQueuedCount, label: "queued" },
+    ],
+    clashroyale: (s) => [
+      { value: s.clashRoyaleCardCount, label: "cards owned" },
+      { value: s.clashRoyaleTrophies, label: "trophies" },
+    ],
+    brawlstars: (s) => [
+      { value: s.brawlStarsBrawlerCount, label: "brawlers" },
+      { value: s.brawlStarsTrophies, label: "trophies" },
     ],
   };
   const tiles = stats ? (TILE_SETS[entrySlug]?.(stats) ?? []) : [];
@@ -498,6 +535,8 @@ function SectionEditor({
   hasCsv: boolean;
 }) {
   const WHAT: Record<string, string> = {
+    "sekai:Profile":
+      "In-game display name and player rank — shown on the Sekai profile banner. Not synced from anywhere, set by hand.",
     "sekai:Characters":
       "Set favorite tier (Oshi / Favorite / HM) and character rank — favorited characters show on the profile's Summary tab.",
     "sekai:Cards": "Toggle owned, set level, master rank, and skill level per card.",
@@ -508,11 +547,18 @@ function SectionEditor({
     "sekai:Honors": "Toggle owned honors and their level.",
     "genshin:Characters":
       "Synced wholesale from HoYoLAB — level, constellation, talents, equipped weapon, and equipped artifacts (with substats) for every character you own. No manual editing; hit Sync to refresh.",
+    "genshin:Gear":
+      "Full artifact/weapon inventory (equipped + benched) — HoYoLAB's public API only exposes what's equipped, so this comes from a local .GOOD scan uploaded on the Characters tab instead. No manual editing; re-upload to refresh.",
     "anime:Library":
       "Paste a MyAnimeList anime or manga/light-novel URL to add it — title, cover art, and synopsis are pulled from Jikan (a free MAL mirror). Dex never syncs your actual MAL list; set status per title here.",
+    "clashroyale:Cards":
+      "Synced wholesale from Supercell's API — level, count, and evolution progress for every card in your collection. No manual editing; hit Sync to refresh.",
+    "brawlstars:Brawlers":
+      "Synced wholesale from Supercell's API — power level, rank, and trophies for every brawler you've unlocked. No manual editing; hit Sync to refresh.",
   };
 
   const BUILT_EDITORS: Record<string, React.ComponentType> = {
+    "sekai:Profile": SekaiProfileEditor,
     "sekai:Characters": CharactersEditor,
     "sekai:Cards": CardsEditor,
     "sekai:Music": MusicEditor,
@@ -520,7 +566,10 @@ function SectionEditor({
     "sekai:Stamps": StampsEditor,
     "sekai:Honors": HonorsEditor,
     "genshin:Characters": GenshinEditor,
+    "genshin:Gear": GenshinGearSection,
     "anime:Library": AnimeEditor,
+    "clashroyale:Cards": ClashRoyaleEditor,
+    "brawlstars:Brawlers": BrawlStarsEditor,
   };
   const key = `${entrySlug}:${section}`;
   const Editor = BUILT_EDITORS[key];

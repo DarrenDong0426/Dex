@@ -86,7 +86,7 @@ export default function AnimeSummary() {
   const topLevel = anime.filter((e) => e.parentId == null);
   const seasonsOf = (id: number) => anime.filter((e) => e.parentId === id);
 
-  const favorites = topLevel.filter((e) => e.isFavorite).slice(0, 3);
+  const favorites = topLevel.filter((e) => e.isFavorite);
   const withStatus = topLevel.map((e) => ({
     ...e,
     effectiveStatus: effectiveStatus(e, seasonsOf(e.id)),

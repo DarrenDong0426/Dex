@@ -33,6 +33,28 @@ scoped and don't touch working code unless asked.
 
 ## RECURRING GOTCHAS (hit these repeatedly — check first)
 
+- **NEVER pass `DIRECT_URL` (or any URL you haven't independently verified is a
+  separate, disposable database) as `--shadow-database-url` to any `prisma`
+  command.** In this project (Supabase), `DIRECT_URL` and `DATABASE_URL` are
+  the SAME live database — only the port differs (6543 pooled vs 5432 direct).
+  `prisma migrate diff --shadow-database-url X` (and similar) treats X as fully
+  disposable scratch space and will wipe it. This is exactly how the entire DB
+  got nuked on 2026-08-15 (`migrate diff` run against `DIRECT_URL`, believed to
+  be a throwaway shadow db, was actually prod). `prisma migrate dev` is safe by
+  comparison — it auto-creates its own temp shadow db rather than using a given
+  URL directly. Before running ANY unfamiliar prisma CLI invocation against
+  this project, check what every URL argument actually points to first.
+- **No backup safety net**: free-tier Supabase, no PITR, no automated backups.
+  A live-DB mistake here is not recoverable except via whatever's independently
+  re-derivable (external master data via `/api/seed/*`, HoYoLAB re-sync,
+  locally-held CSVs/`.GOOD` files). Treat every live-DB-touching command as if
+  there's no undo, because there isn't one. Run `./scripts/backup-db.sh
+  <label>` before any risky schema/migration work — plain `pg_dump`
+  (postgresql@17 via brew) against `DIRECT_URL`, dumps to `backups/`
+  (gitignored). Manual habit only, no scheduled/automated trigger set up yet.
+  Note: the DB password in `.env` contains a literal `@` — the script parses
+  the URL into PG* env vars rather than passing it whole, since pg_dump's own
+  URI parser splits on the first `@` and breaks otherwise.
 - **Restart the dev server** after: adding a new `route.ts`, any `prisma migrate`,
   or any resolver/schema change. Turbopack caches the old Prisma client and old
   resolvers aggressively — `prisma.X does not exist` or stale data usually = needs
@@ -40,7 +62,10 @@ scoped and don't touch working code unless asked.
 - **Module/global caches**: several client components hold a module-level cache
   (e.g. `HONOR_CACHE`, `MUSIC_CACHE`) and the server caches some lists on
   `globalThis` (e.g. `__musicListCache`). After changing data, HARD-refresh the
-  browser (Cmd/Ctrl+Shift+R) to clear the client cache.
+  browser (Cmd/Ctrl+Shift+R) to clear the client cache. `__musicListCache` is
+  ONLY busted by specific edit mutations, NOT by re-seeding or re-importing —
+  after any bulk data change (reseed, CSV reimport, DB restore), restart the
+  dev server too, or musicList will keep serving whatever it cached first.
 - **New reference table an existing populated table must FK into = TWO migrations**:
   (1) create the reference model with no relations, migrate, seed; (2) add the
   relation both sides, migrate. One migration -> Postgres 23503 FK violation and
@@ -67,10 +92,13 @@ Event (+UserEvent), Stamp (+UserStamp), Honor (+UserHonor, +HonorGroup),
 BondHonor (+UserBondHonor), AreaItem (+UserAreaItem), UserChallengeStage.
 
 - **Character naming trap**: `firstName` = the Japanese-first name = SURNAME
-  ("Hoshino"); `givenName` = given ("Ichika"). EN display = givenName + " " + firstName.
-  For self-hosted icons /public/chara/<given></given>.png the given name is the LAST word of
-  the display string. Virtual Singers (ids 21-26) were stored swapped and fixed
-  in-DB; MEIKO/KAITO are mononyms (firstName null).
+  ("Hoshino"); `givenName` = given ("Ichika"). EN display = givenName + " " + firstName
+  (e.g. "Ichika Hoshino" — given name FIRST). For self-hosted icons
+  /public/chara/<given></given>.png the given name is the FIRST word of the display
+  string (was wrongly documented/coded as "LAST word" until 2026-08-15 — that
+  bug silently 404'd every character's face icon except the two mononyms,
+  MEIKO/KAITO, since a one-word name's first/last word are the same thing).
+  Virtual Singers (ids 21-26) were stored swapped and fixed in-DB.
 - **Prisma accessor gotcha**: models are singular (`prisma.honor`, `prisma.userHonor`)
   BUT `UserBondHonors` is PLURAL -> `prisma.userBondHonors`. A wrong accessor throws
   and blanks the whole GraphQL response.

@@ -2,15 +2,18 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { games, themes, type Game, type Mode } from "@/app/games";
+import { games, themes, tabsFor, type Game, type Mode } from "@/app/games";
 import { useThemeMode } from "@/app/useThemeMode";
 import BackgroundFX from "@/app/BackgroundFX";
 import ThemeToggle from "@/app/ThemeToggle";
 import StampsSection from "@/app/profile/StampsSection";
 import GenshinCharactersSection from "@/app/profile/GenshinCharactersSection";
+import GenshinGearSection from "@/app/profile/GenshinGearSection";
 import GenshinFavoritesSummary from "@/app/profile/GenshinFavoritesSummary";
 import AnimeLibrarySection from "@/app/profile/AnimeLibrarySection";
 import AnimeSummary from "@/app/profile/AnimeSummary";
+import ClashRoyaleSection from "@/app/profile/ClashRoyaleSection";
+import BrawlStarsSection from "@/app/profile/BrawlStarsSection";
 import { rarityGlyph } from "@/app/profile/images";
 import {
   fanHonorForRank,
@@ -80,11 +83,14 @@ const DIFFICULTY_COLORS: Record<string, string> = {
 };
 
 // Self-hosted character icons in /public/chara/, named by lowercase given name
-// (e.g. /chara/ichika.png). Name comes as "Hoshino Ichika" (surname first),
-// so the given name is the LAST word.
+// (e.g. /chara/ichika.png). The resolver builds `name` as givenName + " " +
+// firstName (EN order, e.g. "Ichika Hoshino" — see the GraphQL Character
+// resolver), so the given name is the FIRST word, not the last. (Bug found
+// 2026-08-15: this used to take the last word, which only worked for the
+// mononym cases — MEIKO/KAITO — and silently 404'd every other character's
+// face icon.)
 function charaIcon(fullName: string): string {
-  const parts = fullName.trim().split(" ");
-  const given = parts[parts.length - 1].toLowerCase();
+  const given = fullName.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
   return `/chara/${given}.png`;
 }
 
@@ -102,11 +108,11 @@ function parseHash(): { slug: string; section: string } | null {
   const game = games.find((g) => raw === g.slug || raw.startsWith(`${g.slug}-`));
   if (!game) return null;
   const sectionPart = raw === game.slug ? "" : raw.slice(game.slug.length + 1);
-  const allSections = ["Summary", ...game.sections];
+  const allSections = tabsFor(game);
   const section = sectionPart
     ? allSections.find((s) => sectionToSlug(s) === sectionPart)
     : undefined;
-  return { slug: game.slug, section: section ?? "Summary" };
+  return { slug: game.slug, section: section ?? allSections[0] };
 }
 
 export default function ProfileClient({
@@ -134,7 +140,7 @@ export default function ProfileClient({
   function pickGame(slug: string) {
     const game = games.find((g) => g.slug === slug) ?? games[0];
     setActiveSlug(slug);
-    setActiveSection(["Summary", ...game.sections][0]);
+    setActiveSection(tabsFor(game)[0]);
   }
 
   // apply a deep link once mounted client-side
@@ -2785,7 +2791,7 @@ function SummaryCard({
   favoriteSongs: FavoriteSong[];
 }) {
   const hasData = characters.length > 0;
-  const allSections = ["Summary", ...game.sections];
+  const allSections = tabsFor(game);
 
   return (
     <div
@@ -2861,7 +2867,9 @@ function SummaryCard({
           )}
         </div>
 
-        {activeSection === "Cards" && <CardsSection characters={characters} />}
+        {game.slug === "sekai" && activeSection === "Cards" && (
+          <CardsSection characters={characters} />
+        )}
 
         {activeSection === "Music" && <MusicSection />}
 
@@ -2879,19 +2887,34 @@ function SummaryCard({
           <GenshinCharactersSection />
         )}
 
+        {game.slug === "genshin" && activeSection === "Gear" && (
+          <GenshinGearSection />
+        )}
+
         {game.slug === "anime" && activeSection === "Library" && (
           <AnimeLibrarySection />
         )}
 
+        {game.slug === "clashroyale" && activeSection === "Cards" && (
+          <ClashRoyaleSection />
+        )}
+
+        {game.slug === "brawlstars" && activeSection === "Brawlers" && (
+          <BrawlStarsSection />
+        )}
+
         {activeSection !== "Summary" &&
-          activeSection !== "Cards" &&
+          !(game.slug === "sekai" && activeSection === "Cards") &&
           activeSection !== "Music" &&
           activeSection !== "Events" &&
           activeSection !== "Stamps" &&
           activeSection !== "Kizuna" &&
           activeSection !== "Honors" &&
           !(game.slug === "genshin" && activeSection === "Characters") &&
-          !(game.slug === "anime" && activeSection === "Library") && (
+          !(game.slug === "genshin" && activeSection === "Gear") &&
+          !(game.slug === "anime" && activeSection === "Library") &&
+          !(game.slug === "clashroyale" && activeSection === "Cards") &&
+          !(game.slug === "brawlstars" && activeSection === "Brawlers") && (
             <div className="py-12 text-center text-[var(--muted)]">
               {activeSection} — coming soon
             </div>

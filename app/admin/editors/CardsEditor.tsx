@@ -10,6 +10,7 @@ import {
   charaIcon,
   cardArtUrl,
   rarityGlyph,
+  isBirthdayCard,
   maxLevelForRarity,
   MAX_MASTER_RANK,
   MAX_SKILL_LEVEL,
@@ -88,6 +89,78 @@ export default function CardsEditor() {
       {/* keyed by charId so switching characters fully remounts the pane
           (fresh cards/selected state) instead of resetting state in an effect */}
       {charId != null && <CharacterCardsPane key={charId} characterId={charId} />}
+    </div>
+  );
+}
+
+// A single full-size grid tile representing one state of a card — for
+// 3★/4★ cards this renders twice (basic + trained), as two fully independent
+// tiles, not a split/half tile. "active" = this specific state currently
+// exists; "locked" (basic tile only) means it can't be toggled off because
+// the trained tile depends on it existing.
+function CardTile({
+  assetbundleName,
+  rarity,
+  trained,
+  active,
+  locked,
+  label,
+  onToggle,
+  onEdit,
+}: {
+  assetbundleName: string;
+  rarity: number;
+  trained: boolean;
+  active: boolean;
+  locked?: boolean;
+  label?: string;
+  onToggle: () => void;
+  onEdit: () => void;
+}) {
+  return (
+    <div
+      title={
+        locked
+          ? "Owned because the trained version exists — untrain it first to remove"
+          : trained
+            ? "Toggle special-trained ownership"
+            : "Toggle basic ownership"
+      }
+      className="relative aspect-[3/4] overflow-hidden rounded-xl border transition"
+      style={{ borderColor: active ? "var(--line)" : "#2a2e4a" }}
+    >
+      <button
+        onClick={() => {
+          if (!locked) onToggle();
+        }}
+        className="h-full w-full"
+        style={{ cursor: locked ? "default" : "pointer" }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={cardArtUrl(assetbundleName, trained)}
+          alt={trained ? "trained" : "basic"}
+          className="h-full w-full object-cover"
+          style={{ filter: active ? undefined : "grayscale(1) brightness(0.4)" }}
+          loading="lazy"
+          onError={(e) => {
+            // some cards only have one art variant — hide rather than show
+            // wrong art for a state that may still be valid
+            e.currentTarget.style.visibility = "hidden";
+          }}
+        />
+      </button>
+      <button
+        onClick={onEdit}
+        title="Edit level / master rank / skill level"
+        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-[10px] text-white/80 hover:text-white"
+      >
+        ✎
+      </button>
+      <div className="pointer-events-none absolute bottom-0 left-0 right-0 bg-black/60 px-1.5 py-1 text-center text-[11px] font-bold text-[#f0d15a]">
+        {rarityGlyph(rarity)}
+        {label && <span className="ml-1 font-normal text-white/70">{label}</span>}
+      </div>
     </div>
   );
 }
@@ -209,43 +282,53 @@ function CharacterCardsPane({ characterId }: { characterId: number }) {
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        {filtered.map((c) => (
-          <button
-            key={c.cardId}
-            onClick={() => setSelected(c.cardId)}
-            title={c.name}
-            className="relative aspect-[3/4] overflow-hidden rounded-xl border transition"
-            style={{
-              borderColor: c.owned ? "var(--line)" : "#2a2e4a",
-            }}
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={cardArtUrl(c.assetbundleName, Boolean(c.specialTraining))}
-              alt={c.name}
-              className="h-full w-full object-cover"
-              style={{
-                filter: c.owned ? undefined : "grayscale(1) brightness(0.4)",
-              }}
-              loading="lazy"
-              onError={(e) => {
-                // some cards only have one art variant (e.g. certain collab
-                // cards have no untrained state) — try the other before
-                // giving up
-                const img = e.currentTarget;
-                if (img.dataset.fallback !== "1") {
-                  img.dataset.fallback = "1";
-                  img.src = cardArtUrl(c.assetbundleName, !c.specialTraining);
-                } else {
-                  img.style.visibility = "hidden";
-                }
-              }}
-            />
-            <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1.5 py-1 text-center text-[11px] font-bold text-[#f0d15a]">
-              {rarityGlyph(c.rarity)}
-            </div>
-          </button>
-        ))}
+        {filtered.flatMap((c) =>
+          c.rarity >= 3 && !isBirthdayCard(c.rarity)
+            ? [
+                // 3★/4★ cards get two fully independent tiles — basic and
+                // trained — each its own grid cell, not a split tile.
+                // Special implies basic is guaranteed owned (can't train a
+                // card you don't have), so the basic tile locks while
+                // special is on.
+                <CardTile
+                  key={`${c.cardId}-basic`}
+                  assetbundleName={c.assetbundleName}
+                  rarity={c.rarity}
+                  trained={false}
+                  active={c.owned}
+                  locked={Boolean(c.specialTraining)}
+                  label="basic"
+                  onToggle={() => saveCard(c.cardId, { owned: !c.owned })}
+                  onEdit={() => setSelected(c.cardId)}
+                />,
+                <CardTile
+                  key={`${c.cardId}-trained`}
+                  assetbundleName={c.assetbundleName}
+                  rarity={c.rarity}
+                  trained={true}
+                  active={Boolean(c.specialTraining)}
+                  label="trained"
+                  onToggle={() =>
+                    saveCard(c.cardId, {
+                      specialTraining: !c.specialTraining,
+                      owned: !c.specialTraining ? true : c.owned,
+                    })
+                  }
+                  onEdit={() => setSelected(c.cardId)}
+                />,
+              ]
+            : [
+                <CardTile
+                  key={c.cardId}
+                  assetbundleName={c.assetbundleName}
+                  rarity={c.rarity}
+                  trained={false}
+                  active={c.owned}
+                  onToggle={() => saveCard(c.cardId, { owned: !c.owned })}
+                  onEdit={() => setSelected(c.cardId)}
+                />,
+              ],
+        )}
         {filtered.length === 0 && (
           <p className="col-span-full py-8 text-center text-sm text-[var(--muted)]">
             No cards match &quot;{query}&quot;.
@@ -366,10 +449,13 @@ function CardModal({
                   max={MAX_SKILL_LEVEL}
                   onCommit={(v) => onSave({ skillLevel: v })}
                 />
-                {/* only 3★/4★ cards have a special-training state in-game */}
-                {card.rarity >= 3 && (
-                  <label className="flex items-center justify-between text-xs text-[var(--muted)]">
-                    Special training
+                {/* only 3★/4★ cards have a special-training state in-game —
+                    birthday cards (rarity 5) are fixed, no trained variant —
+                    still show the row for those so it's clear that's a fact
+                    about the card, not a missing/broken control */}
+                <label className="flex items-center justify-between text-xs text-[var(--muted)]">
+                  Special training
+                  {card.rarity >= 3 && !isBirthdayCard(card.rarity) ? (
                     <input
                       type="checkbox"
                       checked={card.specialTraining ?? false}
@@ -378,8 +464,10 @@ function CardModal({
                       }
                       className="accent-[var(--accent)]"
                     />
-                  </label>
-                )}
+                  ) : (
+                    <span className="italic">card has none</span>
+                  )}
+                </label>
               </div>
             )}
           </div>
