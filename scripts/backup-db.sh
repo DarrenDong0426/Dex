@@ -32,14 +32,20 @@ fi
 # straight to pg_dump — the password in .env contains a literal '@', which
 # breaks pg_dump's URI parser (it splits at the first '@', not the last).
 # PGPASSWORD as a plain env var sidesteps any URL-encoding issue entirely.
-eval "$(node -e "
-const u = new URL(process.argv[1]);
+# .trim() guards against stray whitespace; captured + checked explicitly
+# rather than eval'd straight from the command substitution, since `set -e`
+# doesn't reliably catch a failure inside $(...) — a crash here would
+# otherwise silently eval to nothing and let pg_dump run with no PG* vars
+# set at all (hit exactly this in the GitHub Actions version of this script).
+PARSED=$(node -e "
+const u = new URL(process.argv[1].trim());
 console.log('export PGHOST=' + JSON.stringify(u.hostname));
 console.log('export PGPORT=' + JSON.stringify(u.port || '5432'));
 console.log('export PGUSER=' + JSON.stringify(decodeURIComponent(u.username)));
 console.log('export PGPASSWORD=' + JSON.stringify(decodeURIComponent(u.password)));
 console.log('export PGDATABASE=' + JSON.stringify(u.pathname.replace(/^\//, '')));
-" "$DIRECT_URL")"
+" "$DIRECT_URL") || { echo "Failed to parse DIRECT_URL" >&2; exit 1; }
+eval "$PARSED"
 
 mkdir -p backups
 STAMP=$(date +%Y-%m-%d_%H%M)
