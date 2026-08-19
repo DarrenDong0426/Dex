@@ -1,0 +1,54 @@
+name: Reseed Sekai master data
+
+# Keeps Dex's Project Sekai reference tables (cards, characters, music,
+# events, stamps, honors, ...) in sync with the community master-data
+# mirror (Sekai-World/sekai-master-db-en-diff) that app/api/seed/* pulls
+# from — that mirror updates ~daily as new events/cards/banners ship in
+# the live game. Every /api/seed/* route is an idempotent upsert
+# (createMany skipDuplicates, or upsert) per CLAUDE.md's "Seeds"
+# convention, so hitting all of them once a day is safe to just re-run.
+on:
+  schedule:
+    - cron: "43 8 * * *" # ~daily, off the :00 mark to avoid GitHub's cron congestion
+  workflow_dispatch: {} # lets you trigger a reseed on demand from the Actions tab
+
+jobs:
+  reseed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit each seed endpoint
+        run: |
+          BASE="https://gamedex.cc"
+
+          # characters before cards: Card.characterId is a hard FK
+          # (@relation) to Character, so a from-scratch seed would 23503
+          # on the cards insert if cards ran first. Everything else here
+          # has no enforced FK between these tables (musicId/honorGroupId
+          # etc. are plain Ints, not @relation fields), so their order
+          # doesn't matter — kept in loosely logical clusters anyway.
+          ENDPOINTS=(
+            characters
+            cards
+            musics
+            music-tag
+            music-difficulty
+            events
+            stamps
+            honor-groups
+            honors
+            area-items
+            bond-honors
+          )
+
+          fail=0
+          for ep in "${ENDPOINTS[@]}"; do
+            echo "== $ep =="
+            code=$(curl -s --max-time 60 -o /tmp/resp.json -w "%{http_code}" "$BASE/api/seed/$ep")
+            cat /tmp/resp.json
+            echo
+            if [ "$code" -ge 300 ]; then
+              echo "::error::$ep returned HTTP $code"
+              fail=1
+            fi
+          done
+          exit $fail

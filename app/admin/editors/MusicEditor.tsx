@@ -9,7 +9,7 @@ import { jacketUrl } from "@/app/profile/images";
 import { DIFFICULTY_ORDER, DIFFICULTY_COLORS } from "@/app/profile/types";
 import { gql } from "./gql";
 
-type MusicResult = { difficulty: string; playResult: string | null };
+type MusicResult = { difficulty: string; playResult: string | null; playLevel: number | null };
 type MusicSong = {
   id: number;
   title: string;
@@ -17,6 +17,25 @@ type MusicSong = {
   results: MusicResult[];
   favorite: boolean;
 };
+
+// sort key: the chosen difficulty's chart level, or — when no difficulty is
+// picked ("all") — the song's own hardest chart (APPEND if it has one, else
+// MASTER). null means the song has no chart at that difficulty.
+function musicSortLevel(s: MusicSong, diffFilter: string): number | null {
+  const byDiff = new Map(s.results.map((r) => [r.difficulty, r.playLevel]));
+  return diffFilter === "all"
+    ? (byDiff.get("APPEND") ?? byDiff.get("MASTER") ?? null)
+    : (byDiff.get(diffFilter) ?? null);
+}
+
+// easiest-first by chart level; songs missing that chart always sort last
+function compareMusicSort(a: MusicSong, b: MusicSong, diffFilter: string): number {
+  const la = musicSortLevel(a, diffFilter);
+  const lb = musicSortLevel(b, diffFilter);
+  if (la == null) return lb == null ? 0 : 1;
+  if (lb == null) return -1;
+  return la - lb;
+}
 
 const RESULT_CYCLE: (string | null)[] = [
   null,
@@ -41,11 +60,12 @@ export default function MusicEditor() {
   const [songs, setSongs] = useState<MusicSong[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [diffFilter, setDiffFilter] = useState("all");
   const [savingKey, setSavingKey] = useState<string | null>(null);
 
   useEffect(() => {
     gql(
-      `{ musicList { id title assetbundleName favorite results { difficulty playResult } } }`,
+      `{ musicList { id title assetbundleName favorite results { difficulty playResult playLevel } } }`,
     )
       .then((d) => setSongs(d.musicList))
       .catch((e) => setError(String(e.message ?? e)));
@@ -109,18 +129,47 @@ export default function MusicEditor() {
   const filtered = songs.filter((s) =>
     s.title.toLowerCase().includes(query.trim().toLowerCase()),
   );
+  // easiest-first: sort by the chosen difficulty's chart level, or — with no
+  // difficulty picked — each song's own hardest chart (APPEND if it has one,
+  // else MASTER)
+  filtered.sort((a, b) => compareMusicSort(a, b, diffFilter));
 
   return (
     <div className="flex flex-col gap-3">
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Search songs…"
-        className="w-full max-w-xs rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--accent)]"
-      />
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search songs…"
+          className="w-full max-w-xs rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 text-sm text-[var(--text)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--accent)]"
+        />
+        {/* sorts the list below by this difficulty's chart level, hardest
+            first; "All" falls back to each song's own hardest chart
+            (APPEND if it has one, else MASTER) */}
+        <div className="event-scroll inline-flex max-w-full overflow-x-auto rounded-full border border-[var(--line)] bg-[var(--panel-2)] p-0.5 text-[11px] font-semibold">
+          {["all", ...DIFFICULTY_ORDER].map((d) => (
+            <button
+              key={d}
+              onClick={() => setDiffFilter(d)}
+              className="flex-shrink-0 rounded-full px-2.5 py-1 transition"
+              style={{
+                background:
+                  diffFilter === d
+                    ? d === "all"
+                      ? "var(--accent)"
+                      : DIFFICULTY_COLORS[d]
+                    : "transparent",
+                color: diffFilter === d ? "#0c0a1e" : "var(--muted)",
+              }}
+            >
+              {d === "all" ? "All" : d[0] + d.slice(1).toLowerCase()}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="flex flex-col gap-3">
         {filtered.map((s) => {
-          const byDiff = new Map(s.results.map((r) => [r.difficulty, r.playResult]));
+          const byDiff = new Map(s.results.map((r) => [r.difficulty, r]));
           return (
             <div
               key={s.id}
@@ -154,15 +203,16 @@ export default function MusicEditor() {
                     // row's columns aligned instead of shifting left
                     return <div key={d} className="h-10 w-14" />;
                   }
-                  const result = byDiff.get(d) ?? null;
+                  const entry = byDiff.get(d) ?? null;
+                  const result = entry?.playResult ?? null;
                   const isFP = result === "FULL_PERFECT";
                   const saving = savingKey === `${s.id}:${d}`;
                   return (
                     <button
                       key={d}
                       onClick={() => cycle(s.id, d, result)}
-                      title={`${d}: ${result ?? "no result"} (click to change)`}
-                      className="flex h-10 w-14 items-center justify-center rounded-lg text-xs font-bold transition"
+                      title={`${d} Lv${entry?.playLevel ?? "?"}: ${result ?? "no result"} (click to change)`}
+                      className="flex h-10 w-14 flex-col items-center justify-center rounded-lg font-bold leading-none transition"
                       style={{
                         background: isFP
                           ? FULL_PERFECT_GRADIENT
@@ -177,7 +227,10 @@ export default function MusicEditor() {
                         opacity: saving ? 0.5 : 1,
                       }}
                     >
-                      {result ? RESULT_LABEL[result] : d.slice(0, 3)}
+                      <span className="text-sm">{entry?.playLevel ?? "?"}</span>
+                      <span className="mt-0.5 text-[9px]">
+                        {result ? RESULT_LABEL[result] : d.slice(0, 3)}
+                      </span>
                     </button>
                   );
                 })}

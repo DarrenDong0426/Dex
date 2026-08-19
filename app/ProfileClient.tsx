@@ -1855,6 +1855,25 @@ type MusicSong = {
   results: MusicResult[];
 };
 
+// sort key: the chosen difficulty's chart level, or — when no difficulty is
+// picked ("all") — the song's own hardest chart (APPEND if it has one, else
+// MASTER). null means the song has no chart at that difficulty.
+function musicSortLevel(s: MusicSong, diffFilter: string): number | null {
+  const byDiff = new Map(s.results.map((r) => [r.difficulty, r.playLevel]));
+  return diffFilter === "all"
+    ? (byDiff.get("APPEND") ?? byDiff.get("MASTER") ?? null)
+    : (byDiff.get(diffFilter) ?? null);
+}
+
+// easiest-first by chart level; songs missing that chart always sort last
+function compareMusicSort(a: MusicSong, b: MusicSong, diffFilter: string): number {
+  const la = musicSortLevel(a, diffFilter);
+  const lb = musicSortLevel(b, diffFilter);
+  if (la == null) return lb == null ? 0 : 1;
+  if (lb == null) return -1;
+  return la - lb;
+}
+
 // difficulty level pip — circle with the play level number. COLOR reflects the
 // user's result on that chart (same ladder as honor pips):
 //   none/not-cleared → empty (outline)   clear → bronze
@@ -1864,6 +1883,12 @@ const RESULT_COLORS: Record<string, string> = {
   FULL_COMBO: "#4a9de0", // blue/teal
   FULL_PERFECT: "#9b5ad6", // purple
 };
+
+// shared between LevelPip and its blank placeholder so every slot — filled
+// or empty — is the same size and difficulties line up column-wise. Sized
+// to actually contain the rotated diamond's diagonal (~1.4x its side), not
+// just the diamond's own un-rotated box.
+const PIP_SLOT = "inline-flex h-9 w-9 flex-shrink-0 items-center justify-center sm:h-10 sm:w-10";
 
 function LevelPip({
   level,
@@ -1880,20 +1905,30 @@ function LevelPip({
   const rainbow =
     "linear-gradient(135deg, #ff5f6d, #ffc371, #47e5bc, #4a9de0, #9b5ad6)";
   return (
+    // outer slot is NOT rotated and sized bigger than the diamond inside
+    // it — rotating a square doesn't change its layout box, so a rotated
+    // square's diagonal (~1.4x its side) was spilling outside its own
+    // slot into neighboring pips and past the row's top/bottom. This slot
+    // is sized to actually contain that diagonal so the diamond fits
+    // without overlapping or getting clipped.
     <span
-      className="inline-flex h-8 w-8 flex-shrink-0 rotate-45 items-center justify-center rounded-[5px] text-[13px] font-extrabold sm:h-9 sm:w-9 sm:text-[14px]"
-      style={{
-        background: isFP ? rainbow : filled ? color : "transparent",
-        border: `2px solid ${isFP ? "transparent" : (color ?? "var(--line)")}`,
-        boxShadow: isFP ? "0 0 10px 1px rgba(155,90,214,0.6)" : undefined,
-      }}
+      className={PIP_SLOT}
       title={`Lv ${level}${result ? ` · ${result.replace("_", " ").toLowerCase()}` : ""}`}
     >
       <span
-        className="-rotate-45"
-        style={{ color: filled ? "#0c0a1e" : "var(--muted)" }}
+        className="flex h-6 w-6 rotate-45 items-center justify-center rounded-[4px] text-[10px] font-extrabold sm:h-7 sm:w-7 sm:text-[12px]"
+        style={{
+          background: isFP ? rainbow : filled ? color : "transparent",
+          border: `2px solid ${isFP ? "transparent" : (color ?? "var(--line)")}`,
+          boxShadow: isFP ? "0 0 10px 1px rgba(155,90,214,0.6)" : undefined,
+        }}
       >
-        {level}
+        <span
+          className="-rotate-45"
+          style={{ color: filled ? "#0c0a1e" : "var(--muted)" }}
+        >
+          {level}
+        </span>
       </span>
     </span>
   );
@@ -1924,12 +1959,14 @@ const ROW_H = 136; // fixed row height incl. gap, for virtualization
 function MusicRow({ s }: { s: MusicSong }) {
   const byDiff = new Map(s.results.map((r) => [r.difficulty, r]));
   return (
-    <div className="flex flex-col gap-2 rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] p-3 transition hover:border-[var(--accent)]">
-      {/* jacket + title on their own row — freeing the pips row below to
-          use the row's FULL width (not squeezed beside an 80px jacket)
-          means all 4-6 difficulty pips fit on one line without scrolling
-          on essentially any phone width, instead of just 2-3 */}
-      <div className="flex items-center gap-3">
+    <div className="flex h-full flex-col justify-center gap-2 rounded-2xl border border-[var(--line)] bg-[var(--panel-2)] p-3 transition hover:border-[var(--accent)] sm:flex-row sm:items-center sm:gap-4">
+      {/* mobile: jacket + title on their own row above the pips — freeing
+          the pips row to use the row's FULL width (not squeezed beside an
+          80px jacket) means all 4-6 difficulty pips fit on one line
+          without scrolling on essentially any phone width, instead of
+          just 2-3. sm and up: there's enough width for both side by side
+          in one row instead. */}
+      <div className="flex items-center gap-3 sm:w-56 sm:flex-shrink-0">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={jacketUrl(s.assetbundleName)}
@@ -1945,16 +1982,22 @@ function MusicRow({ s }: { s: MusicSong }) {
         </div>
       </div>
       {/* the list above this is virtualized with a FIXED per-row pixel
-          height (ROW_H) for scroll-position math, so this row's real
-          height needs to stay fixed no matter how many difficulties a song
-          has. event-scroll/overflow-x-auto is a fallback for the rare
+          height (ROW_H) for scroll-position math — the outer card is
+          pinned to that same fixed slot (h-full, centered) regardless of
+          which of the two layouts above is active, so switching between
+          them by breakpoint never touches the virtualization math.
+          event-scroll/overflow-x-auto is a fallback for the rare
           6-difficulty (APPEND) song on the narrowest phones — the sizing
           above is chosen so the common 4-5-difficulty case always fits on
-          one line without actually needing to scroll. */}
-      <div className="event-scroll flex flex-nowrap gap-1.5 overflow-x-auto">
+          one line without actually needing to scroll. Every song reserves
+          all 6 slots (blank where it has no chart) and the group is
+          right-aligned, so a given difficulty sits at the same x position
+          on every row instead of shifting left/right by how many charts
+          the song has. */}
+      <div className="event-scroll flex flex-nowrap justify-end gap-1 overflow-x-auto sm:flex-1">
         {DIFFICULTY_ORDER.map((d) => {
           const r = byDiff.get(d);
-          if (!r) return null;
+          if (!r) return <div key={d} className={PIP_SLOT} />;
           return (
             <LevelPip key={d} level={r.playLevel} result={r.playResult} />
           );
@@ -2035,6 +2078,11 @@ function MusicSection() {
     }
     return matchesTag && matchesQuery && matchesStatus;
   });
+
+  // easiest-first: sort by the chosen difficulty's chart level, or — with no
+  // difficulty picked — each song's own hardest chart (APPEND if it has one,
+  // else MASTER)
+  filtered.sort((a, b) => compareMusicSort(a, b, diffFilter));
 
   if (error)
     return (
